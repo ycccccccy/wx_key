@@ -1,4 +1,4 @@
-# 聊天工具密钥提取工具
+# 微信数据库key提取工具
 
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows-lightgrey.svg)](https://www.microsoft.com/windows)
@@ -8,12 +8,12 @@
 
 ## 项目简介
 
-本项目提供了一种通过DLL注入技术获取某聊天工具数据库密钥的解决方案。针对当前主流内存搜索key的工具（如 dumprs、chatlog 等）在目标软件 4.1 及以上版本中失效的问题，当前方案相对更稳定
+本项目使用注入DLL获取微信数据库密钥的解决方案。针对当前主流内存搜索key的工具（如 dumprs、chatlog 等）在目标软件 4.1 及以上版本中失效的问题，当前方案相对更稳定
 
 
 ## 技术文档
 
-- [4.1版本密钥分析研究报告](wx4.1_analysis.md) - 详细的技术分析和实现原理
+- [4.1.1.19版本密钥分析研究报告](wx4.1_analysis.md) - 详细的技术分析和实现原理
 
 ## 项目架构
 
@@ -37,7 +37,7 @@ wx_key/
 
 - **操作系统**: Windows 10/11 (64位)
 - **权限要求**: 管理员权限
-- **目标软件**: 某小而美聊天工具 4.0+ 版本
+- **目标软件**: 微信 4.0+ 版本
 
 ### 安装步骤
 
@@ -62,7 +62,7 @@ wx_key/
 
 ```bash
 # 1. 克隆项目
-git [clone https://github.com/ycccccccy/wx_key](https://github.com/ycccccccy/wx_key.git)
+git clone https://github.com/ycccccccy/wx_key.git
 cd wx_key
 
 # 2. 安装依赖
