@@ -40,7 +40,7 @@ DWORD WINAPI KeyProcessorThread(LPVOID lpParam)
             std::string keyHex = ss.str();
 
             std::cout << "\n\n======================================================\n";
-            std::cout << ">>> 微信数据库密钥获取成功! (WeChat DB Key Found!) <<<\n";
+            std::cout << ">>> 微信数据库密钥获取成功<<<\n";
             std::cout << "======================================================\n";
             std::cout << keyHex << std::endl;
             std::cout << "======================================================\n" << std::endl;
@@ -157,13 +157,13 @@ DWORD WINAPI MainThread(HMODULE hModule)
     while (!g_isWindowReady) { EnumWindows(EnumWindowsProc, 0); Sleep(500); }
     std::cout << "[+] 聊天工具已就绪" << std::endl;
 
-    // 直接使用RVA（此处RVA为4.1.1.19版本的）
+    // 直接使用RVA（此RVA为4.1.2.9版本）
     HMODULE hWeixin = GetModuleHandleA("Weixin.dll");
     if (!hWeixin) {
         std::cout << "[-] 致命错误：未能获取模块句柄" << std::endl;
         Sleep(10000); return 0;
     }
-    const uintptr_t rva_setCipherKey = 0x4AEA40;
+    const uintptr_t rva_setCipherKey = 0x4BC1B0;
     uintptr_t setCipherKeyAddr = (uintptr_t)hWeixin + rva_setCipherKey;
     g_targetAddress = setCipherKeyAddr;
     std::cout << "[+] 地址计算成功" << std::endl;
