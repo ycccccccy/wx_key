@@ -157,7 +157,7 @@ DWORD WINAPI MainThread(HMODULE hModule)
     while (!g_isWindowReady) { EnumWindows(EnumWindowsProc, 0); Sleep(500); }
     std::cout << "[+] 聊天工具已就绪" << std::endl;
 
-    // 直接使用RVA（此处RVA为4.1.1.19版本的）
+    // 直接使用RVA（此处RVA为4.1.2.11版本的）
     HMODULE hWeixin = GetModuleHandleA("Weixin.dll");
     if (!hWeixin) {
         std::cout << "[-] 致命错误：未能获取模块句柄" << std::endl;
