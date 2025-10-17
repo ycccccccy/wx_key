@@ -10,6 +10,9 @@
 
 本项目使用注入DLL获取微信数据库密钥的解决方案，解决了当前主流内存搜索key的工具（如 dumprs、chatlog 等）在微信 4.1 及以上版本中失效的问题
 
+欢迎大家查看我的新项目：[EchoTrace - 一个本地、安全的微信聊天记录导出分析与年度报告应用](https://github.com/ycccccccy/echotrace)
+
+
 
 ## 支持版本
 
