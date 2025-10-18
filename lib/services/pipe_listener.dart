@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
 import 'dart:isolate';
@@ -165,10 +166,10 @@ class PipeListener {
           
           final readResult = ReadFile(hPipe, buffer.cast(), 1024, bytesRead, nullptr);
           
-          if (readResult != 0) {
-            final data = String.fromCharCodes(
-              buffer.asTypedList(bytesRead.value).takeWhile((c) => c != 0)
-            );
+          if (readResult != 0 && bytesRead.value > 0) {
+            // 使用 UTF-8 解码，支持中文
+            final bytes = buffer.asTypedList(bytesRead.value);
+            final data = utf8.decode(bytes, allowMalformed: true).trim();
             
             if (data.isNotEmpty) {
               sendPort.send(data);
@@ -237,10 +238,10 @@ class PipeListener {
           
           final readResult = ReadFile(hPipe, buffer.cast(), 1024, bytesRead, nullptr);
           
-          if (readResult != 0) {
-            final data = String.fromCharCodes(
-              buffer.asTypedList(bytesRead.value).takeWhile((c) => c != 0)
-            );
+          if (readResult != 0 && bytesRead.value > 0) {
+            // 使用 UTF-8 解码，支持中文
+            final bytes = buffer.asTypedList(bytesRead.value);
+            final data = utf8.decode(bytes, allowMalformed: true).trim();
             
             if (data.isNotEmpty) {
               sendPort.send(data);

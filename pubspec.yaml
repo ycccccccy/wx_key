@@ -49,6 +49,9 @@ dependencies:
   
   # For HTTP requests (downloading DLL)
   http: ^1.1.0
+  
+  # For opening URLs in browser
+  url_launcher: ^6.2.2
 
 dev_dependencies:
   flutter_test:

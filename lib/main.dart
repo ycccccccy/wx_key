@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as path;
+import 'package:url_launcher/url_launcher.dart';
 import 'dart:io';
 import 'dart:async';
 import 'services/dll_injector.dart';
@@ -358,8 +359,8 @@ class _MyHomePageState extends State<MyHomePage> {
         _logMessages.removeLast();
       }
       
-      // 根据类型更新状态消息
-      if (type == 'INFO' || type == 'SUCCESS') {
+      // 根据类型更新状态消息（但如果已经获取到密钥，保持"密钥获取成功"状态）
+      if ((type == 'INFO' || type == 'SUCCESS') && _extractedKey == null) {
         _statusMessage = message;
       }
     });
@@ -473,11 +474,14 @@ class _MyHomePageState extends State<MyHomePage> {
 
       final dllPath = await DllInjector.downloadDll(_wechatVersion!);
       if (dllPath == null) {
-        _showAnimatedToast('DLL下载失败，请检查网络连接', Colors.red, Icons.error);
         setState(() {
           _isLoading = false;
-          _statusMessage = 'DLL下载失败';
+          _statusMessage = '版本未适配';
         });
+        // 停止管道监听
+        await PipeListener.stopListening();
+        // 显示版本未适配弹窗
+        _showVersionNotSupportedDialog();
         return;
       }
 
@@ -549,11 +553,11 @@ class _MyHomePageState extends State<MyHomePage> {
 
       // 5. 延迟几秒，等待微信完全初始化
       setState(() {
-        _statusMessage = '等待微信完全启动...';
+        _statusMessage = '等待微信完全启动...请不要点击微信任何按键';
       });
       for (int i = 5; i > 0; i--) {
         setState(() {
-          _statusMessage = '等待微信完全启动... ($i秒)';
+          _statusMessage = '等待微信完全启动... ($i秒)，请不要点击微信任何按键';
         });
         await Future.delayed(const Duration(seconds: 1));
       }
@@ -641,14 +645,15 @@ class _MyHomePageState extends State<MyHomePage> {
     if (mounted) {
       setState(() {
         _isWechatRunning = isRunning;
-        if (!_isLoading) {
+        // 如果已经获取到密钥，不要覆盖状态消息
+        if (!_isLoading && _extractedKey == null) {
         if (isRunning) {
             if (!_isDllInjected) {
               _statusMessage = _wechatVersion != null 
                   ? '检测到微信进程 (版本: $_wechatVersion)'
                   : '检测到微信进程';
           } else {
-            _statusMessage = 'DLL已注入，正在监听密钥';
+            _statusMessage = '正在监听密钥，请前往微信登录即可获取密钥';
           }
         } else {
             _statusMessage = _wechatVersion != null 
@@ -703,12 +708,14 @@ class _MyHomePageState extends State<MyHomePage> {
                 ),
               ),
               const SizedBox(width: 12),
-              Text(
-                title,
-                style: const TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w600,
-                  fontFamily: 'HarmonyOS_SansSC',
+              Expanded(
+                child: Text(
+                  title,
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w600,
+                    fontFamily: 'HarmonyOS_SansSC',
+                  ),
                 ),
               ),
             ],
@@ -756,6 +763,125 @@ class _MyHomePageState extends State<MyHomePage> {
       },
     );
     return result ?? false;
+  }
+
+  /// 显示版本未适配弹窗
+  Future<void> _showVersionNotSupportedDialog() async {
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          title: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.red.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(
+                  Icons.error_outline,
+                  color: Colors.red,
+                  size: 24,
+                ),
+              ),
+              const SizedBox(width: 12),
+              const Expanded(
+                child: Text(
+                  '版本未适配',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w600,
+                    fontFamily: 'HarmonyOS_SansSC',
+                  ),
+                ),
+              ),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '当前微信版本 $_wechatVersion 暂未适配。',
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontFamily: 'HarmonyOS_SansSC',
+                  height: 1.5,
+                ),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                '您可以前往 GitHub 提交 Issue 请求适配此版本。',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontFamily: 'HarmonyOS_SansSC',
+                  height: 1.5,
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text(
+                '关闭',
+                style: TextStyle(
+                  color: Colors.grey.shade600,
+                  fontWeight: FontWeight.w500,
+                  fontFamily: 'HarmonyOS_SansSC',
+                ),
+              ),
+            ),
+            ElevatedButton.icon(
+              onPressed: () {
+                Navigator.of(context).pop();
+                _openGitHubIssue();
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF07c160),
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                elevation: 0,
+              ),
+              icon: const Icon(Icons.launch, size: 18),
+              label: const Text(
+                '前往 Issue',
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  fontFamily: 'HarmonyOS_SansSC',
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  /// 打开GitHub Issue页面
+  Future<void> _openGitHubIssue() async {
+    try {
+      final issueUrl = Uri.parse(
+        'https://github.com/ycccccccy/wx_key/issues/new?title=请求适配微信版本 $_wechatVersion&body=当前微信版本：$_wechatVersion%0A%0A请求适配此版本的密钥提取功能。'
+      );
+      
+      // 使用 url_launcher 打开浏览器
+      if (await canLaunchUrl(issueUrl)) {
+        await launchUrl(issueUrl, mode: LaunchMode.externalApplication);
+        _showAnimatedToast('已在浏览器中打开 GitHub Issue', Colors.green, Icons.open_in_new);
+      } else {
+        _showAnimatedToast('无法打开浏览器', Colors.red, Icons.error);
+      }
+    } catch (e) {
+      _showAnimatedToast('打开浏览器失败', Colors.red, Icons.error);
+    }
   }
 
   Widget _buildSimpleActionButton() {

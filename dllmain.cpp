@@ -14,6 +14,32 @@ static volatile BYTE g_originalByte = 0x00;
 static volatile bool g_isWindowReady = false;
 static DWORD g_currentProcessId = 0;
 
+// --- 辅助函数：将本地编码字符串转换为UTF-8 ---
+std::string ConvertToUtf8(const std::string& localStr) {
+    if (localStr.empty()) return "";
+    
+    // 1. 转换为宽字符（UTF-16）
+    int wideSize = MultiByteToWideChar(CP_ACP, 0, localStr.c_str(), -1, nullptr, 0);
+    if (wideSize <= 0) return localStr;
+    
+    std::wstring wideStr(wideSize, 0);
+    MultiByteToWideChar(CP_ACP, 0, localStr.c_str(), -1, &wideStr[0], wideSize);
+    
+    // 2. 转换为UTF-8
+    int utf8Size = WideCharToMultiByte(CP_UTF8, 0, wideStr.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    if (utf8Size <= 0) return localStr;
+    
+    std::string utf8Str(utf8Size, 0);
+    WideCharToMultiByte(CP_UTF8, 0, wideStr.c_str(), -1, &utf8Str[0], utf8Size, nullptr, nullptr);
+    
+    // 移除末尾的空字符
+    if (!utf8Str.empty() && utf8Str.back() == '\0') {
+        utf8Str.pop_back();
+    }
+    
+    return utf8Str;
+}
+
 // --- 日志管道发送函数 ---
 void SendLogMessage(const std::string& message) {
     HANDLE hPipe = CreateFileA(
@@ -27,10 +53,13 @@ void SendLogMessage(const std::string& message) {
     );
 
     if (hPipe != INVALID_HANDLE_VALUE) {
+        // 转换为UTF-8编码
+        std::string utf8Message = ConvertToUtf8(message);
+        
         DWORD bytesWritten;
         DWORD mode = PIPE_READMODE_MESSAGE;
         SetNamedPipeHandleState(hPipe, &mode, nullptr, nullptr);
-        WriteFile(hPipe, message.c_str(), message.length(), &bytesWritten, nullptr);
+        WriteFile(hPipe, utf8Message.c_str(), utf8Message.length(), &bytesWritten, nullptr);
         FlushFileBuffers(hPipe);
         CloseHandle(hPipe);
     }
