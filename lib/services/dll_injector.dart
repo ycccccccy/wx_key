@@ -2,9 +2,10 @@ import 'dart:ffi';
 import 'dart:io';
 import 'package:ffi/ffi.dart';
 import 'package:win32/win32.dart';
+import 'package:http/http.dart' as http;
+import 'package:path/path.dart' as path;
 
 class DllInjector {
-  /// Find all process IDs by name
   static List<int> findProcessIds(String processName) {
     final pidsFound = <int>[];
     final processIds = calloc<DWORD>(1024);
@@ -12,7 +13,6 @@ class DllInjector {
 
     try {
       if (EnumProcesses(processIds, 1024 * sizeOf<DWORD>(), cb) == 0) {
-        print('[-] EnumProcesses failed. Error code: ${GetLastError()}');
         return [];
       }
 
@@ -47,41 +47,29 @@ class DllInjector {
     return pidsFound;
   }
 
-  /// Check if a process is running by name
   static bool isProcessRunning(String processName) {
     return findProcessIds(processName).isNotEmpty;
   }
 
-  /// Inject DLL into a specific process by PID
   static bool injectDllByPid(int pid, String dllPath) {
-    print('\n--- Injecting into PID: $pid ---');
 
-    // 1. Open target process
     final hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
     if (hProcess == 0) {
-      print('[-] OpenProcess failed for PID $pid. Error code: ${GetLastError()}');
       return false;
     }
-    print('[+] Got handle to process: $hProcess');
-
-    // 2. Allocate memory for DLL path
     final remoteMemory = VirtualAllocEx(
         hProcess, nullptr, dllPath.length + 1, MEM_COMMIT, PAGE_READWRITE);
     if (remoteMemory == nullptr) {
-      print('[-] VirtualAllocEx failed. Error code: ${GetLastError()}');
       CloseHandle(hProcess);
       return false;
     }
-    print('[+] Allocated memory at: ${remoteMemory.address.toRadixString(16)}');
 
-    // 3. Write DLL path to remote process
     final dllPathC = dllPath.toNativeUtf8();
     final written = calloc<SIZE_T>();
     try {
       if (WriteProcessMemory(hProcess, remoteMemory, dllPathC,
               dllPath.length + 1, written) ==
           0) {
-        print('[-] WriteProcessMemory failed. Error code: ${GetLastError()}');
         VirtualFreeEx(hProcess, remoteMemory, 0, MEM_RELEASE);
         CloseHandle(hProcess);
         return false;
@@ -90,121 +78,180 @@ class DllInjector {
       free(dllPathC);
       free(written);
     }
-    print('[+] Wrote DLL path to remote memory.');
 
-    // 4. Get LoadLibraryA address
     final hKernel32 = GetModuleHandle('kernel32.dll'.toNativeUtf16());
     final loadLibraryAddr = GetProcAddress(hKernel32, 'LoadLibraryA'.toNativeUtf8().cast());
     if (loadLibraryAddr == nullptr) {
-      print(
-          '[-] GetProcAddress for LoadLibraryA failed. Error code: ${GetLastError()}');
       VirtualFreeEx(hProcess, remoteMemory, 0, MEM_RELEASE);
       CloseHandle(hProcess);
       return false;
     }
-    print('[+] Found LoadLibraryA at: ${loadLibraryAddr.address.toRadixString(16)}');
 
-    // 5. Create remote thread
     final hThread = CreateRemoteThread(
         hProcess, nullptr, 0, loadLibraryAddr.cast(), remoteMemory, 0, nullptr);
     if (hThread == 0) {
-      print('[-] CreateRemoteThread failed. Error code: ${GetLastError()}');
       VirtualFreeEx(hProcess, remoteMemory, 0, MEM_RELEASE);
       CloseHandle(hProcess);
       return false;
     }
-    print('[+] CreateRemoteThread succeeded. Waiting for thread to finish...');
 
     WaitForSingleObject(hThread, INFINITE);
-    print('[+] Remote thread finished.');
 
-    // 6. Cleanup
     VirtualFreeEx(hProcess, remoteMemory, 0, MEM_RELEASE);
     CloseHandle(hThread);
     CloseHandle(hProcess);
 
-    print('[*] Injection into PID $pid complete!');
     return true;
   }
 
-  /// Inject DLL into main WeChat process only
-  /// [processName] WeChat process name (usually 'Weixin.exe')
-  /// [dllPath] Path to the DLL file to inject
   static bool injectDll(String processName, String dllPath) {
-    // Check if DLL file exists
     if (!File(dllPath).existsSync()) {
-      print('[-] Error: DLL not found at "$dllPath"');
       return false;
     }
 
-    print('[*] Looking for main WeChat process...');
     final mainPid = findMainWeChatPid();
 
     if (mainPid == null) {
-      print('[-] Main WeChat process not found or could not be identified.');
       return false;
     }
 
-    print('[*] Found main WeChat process with PID: $mainPid');
     
-    // Inject DLL into main process only
     if (injectDllByPid(mainPid, dllPath)) {
-      print('\n[SUCCESS] DLL injected into main WeChat process.');
       return true;
     } else {
-      print('\n[FAILED] DLL injection failed for main WeChat process.');
       return false;
     }
   }
 
-  /// Launch WeChat application
+  static String? getWeChatDirectory() {
+    const wechatPath = r'C:\Program Files\Tencent\Weixin\Weixin.exe';
+    final wechatFile = File(wechatPath);
+    
+    if (wechatFile.existsSync()) {
+      return path.dirname(wechatPath);
+    }
+    
+    return null;
+  }
+
+  static String? getWeChatVersion() {
+    try {
+      final wechatDir = getWeChatDirectory();
+      if (wechatDir == null) return null;
+      
+      final dir = Directory(wechatDir);
+      final entities = dir.listSync();
+      
+      for (var entity in entities) {
+        if (entity is Directory) {
+          final dirName = path.basename(entity.path);
+          final versionRegex = RegExp(r'^4\.\d+\.\d+\.\d+$');
+          if (versionRegex.hasMatch(dirName)) {
+            return dirName;
+          }
+        }
+      }
+      
+      return null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  static Future<String?> downloadDll(String version) async {
+    try {
+      final url = 'https://github.com/ycccccccy/wx_key/releases/download/dlls/wx_key-$version.dll';
+      
+      final response = await http.get(Uri.parse(url));
+      
+      if (response.statusCode == 200) {
+        final tempDir = Directory.systemTemp;
+        final dllPath = path.join(tempDir.path, 'wx_key-$version.dll');
+        final dllFile = File(dllPath);
+        
+        await dllFile.writeAsBytes(response.bodyBytes);
+        return dllPath;
+      } else {
+        return null;
+      }
+    } catch (e) {
+      return null;
+    }
+  }
+
+  static bool killWeChatProcesses() {
+    try {
+      final pids = findProcessIds('Weixin.exe');
+      
+      if (pids.isEmpty) {
+        return true;
+      }
+      
+      for (var pid in pids) {
+        final hProcess = OpenProcess(PROCESS_TERMINATE, FALSE, pid);
+        if (hProcess != 0) {
+          TerminateProcess(hProcess, 0);
+          CloseHandle(hProcess);
+        }
+      }
+      
+      Future.delayed(const Duration(seconds: 1));
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
   static Future<bool> launchWeChat() async {
     try {
       const wechatPath = r'C:\Program Files\Tencent\Weixin\Weixin.exe';
       final wechatFile = File(wechatPath);
       
       if (!await wechatFile.exists()) {
-        print('[-] WeChat executable not found at: $wechatPath');
         return false;
       }
       
-      print('[*] Launching WeChat...');
       await Process.start(wechatPath, []);
       
-      // Wait a moment for WeChat to start
       await Future.delayed(const Duration(seconds: 2));
       
-      // Check if WeChat is now running
       final isRunning = isProcessRunning('Weixin.exe');
       if (isRunning) {
-        print('[+] WeChat launched successfully');
         return true;
       } else {
-        print('[-] WeChat launch failed or process not detected');
         return false;
       }
     } catch (e) {
-      print('[-] Error launching WeChat: $e');
       return false;
     }
   }
 
-  /// Find main WeChat process by window title
+  static Future<bool> waitForWeChatWindow({int maxWaitSeconds = 10}) async {
+    
+    for (int i = 0; i < maxWaitSeconds * 2; i++) {
+      await Future.delayed(const Duration(milliseconds: 500));
+      
+      final mainPid = findMainWeChatPid();
+      if (mainPid != null) {
+        return true;
+      }
+    }
+    
+    return false;
+  }
+
   static int? findMainWeChatPid() {
     final pids = <int>[];
     
-    // EnumWindows callback function
     final enumWindowsProc = Pointer.fromFunction<EnumWindowsProc>(_enumWindowsProc, 0);
     final pidsPtr = calloc<Pointer<Int32>>();
-    pidsPtr.value = calloc<Int32>(100); // Support up to 100 PIDs
+    pidsPtr.value = calloc<Int32>(100); 
     
     try {
       if (EnumWindows(enumWindowsProc, pidsPtr.address) == 0) {
-        print('[-] EnumWindows failed. Error code: ${GetLastError()}');
         return null;
       }
       
-      // Convert pointer array to list
       for (int i = 0; i < 100; i++) {
         final pid = pidsPtr.value[i];
         if (pid == 0) break;
@@ -212,10 +259,8 @@ class DllInjector {
       }
       
       if (pids.isNotEmpty) {
-        print('[+] Found main WeChat process with PID: ${pids.first}');
         return pids.first;
       } else {
-        print('[-] No main WeChat window found');
         return null;
       }
     } finally {
@@ -224,14 +269,11 @@ class DllInjector {
     }
   }
 
-  /// EnumWindows callback function
   static int _enumWindowsProc(int hWnd, int lParam) {
     try {
-      // Get process ID from window handle
       final processId = calloc<DWORD>();
       GetWindowThreadProcessId(hWnd, processId);
       
-      // Get window title
       final titleLength = GetWindowTextLength(hWnd);
       if (titleLength > 0) {
         final titleBuffer = calloc<Uint16>(titleLength + 1);
@@ -241,13 +283,9 @@ class DllInjector {
         );
         free(titleBuffer);
         
-        // Check if this is the main WeChat window
         if (title.contains('微信') || title.contains('WeChat')) {
-          // Get the PID array pointer
           final pidsPtr = Pointer<Pointer<Int32>>.fromAddress(lParam);
           final pids = pidsPtr.value;
-          
-          // Find first empty slot and add PID
           for (int i = 0; i < 100; i++) {
             if (pids[i] == 0) {
               pids[i] = processId.value;
@@ -258,14 +296,12 @@ class DllInjector {
       }
       
       free(processId);
-      return 1; // Continue enumeration
+      return 1; 
     } catch (e) {
-      print('[-] Error in enumWindowsProc: $e');
-      return 1; // Continue enumeration
+      return 1; 
     }
   }
 
-  /// Get last error message
   static String getLastErrorMessage() {
     final errorCode = GetLastError();
     if (errorCode == 0) return '';

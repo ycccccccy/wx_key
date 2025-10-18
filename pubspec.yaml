@@ -46,6 +46,9 @@ dependencies:
   # For persistent storage and file picking
   shared_preferences: ^2.2.2
   file_picker: ^6.1.1
+  
+  # For HTTP requests (downloading DLL)
+  http: ^1.1.0
 
 dev_dependencies:
   flutter_test:
