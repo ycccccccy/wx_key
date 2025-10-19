@@ -4,6 +4,7 @@ import 'package:ffi/ffi.dart';
 import 'package:win32/win32.dart';
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as path;
+import 'key_storage.dart';
 
 class DllInjector {
   static List<int> findProcessIds(String processName) {
@@ -433,9 +434,24 @@ class DllInjector {
     return null;
   }
 
-  static String? getWeChatDirectory() {
+  static Future<String?> getWeChatDirectory() async {
+    // 1. 首先检查用户手动设置的目录
+    final savedDirectory = await KeyStorage.getWechatDirectory();
+    if (savedDirectory != null) {
+      final dir = Directory(savedDirectory);
+      if (dir.existsSync()) {
+        // 验证目录中是否有 Weixin.exe 或 WeChat.exe
+        final weixinPath = path.join(savedDirectory, 'Weixin.exe');
+        final wechatPath = path.join(savedDirectory, 'WeChat.exe');
+        if (File(weixinPath).existsSync() || File(wechatPath).existsSync()) {
+          return savedDirectory;
+        }
+      }
+      // 保存的目录无效，清除它
+      await KeyStorage.clearWechatDirectory();
+    }
     
-    // 首先尝试从注册表获取路径
+    // 2. 尝试从注册表获取路径
     final wechatPath = _getWeChatPathFromRegistry();
     
     if (wechatPath != null) {
@@ -443,32 +459,35 @@ class DllInjector {
       if (wechatFile.existsSync()) {
         final directory = path.dirname(wechatPath);
         return directory;
-      } else {
       }
     }
     
-    // 如果注册表找不到，尝试常见的默认路径作为备选
-    final fallbackPaths = [
-      r'C:\Program Files\Tencent\WeChat\WeChat.exe',
-      r'C:\Program Files (x86)\Tencent\WeChat\WeChat.exe',
-      r'C:\Program Files\Tencent\Weixin\Weixin.exe',
-      r'C:\Program Files (x86)\Tencent\Weixin\Weixin.exe',
+    // 3. 尝试多个盘符的常见路径
+    final drives = ['C', 'D', 'E', 'F'];
+    final commonPaths = [
+      r'\Program Files\Tencent\WeChat\WeChat.exe',
+      r'\Program Files (x86)\Tencent\WeChat\WeChat.exe',
+      r'\Program Files\Tencent\Weixin\Weixin.exe',
+      r'\Program Files (x86)\Tencent\Weixin\Weixin.exe',
     ];
     
-    for (final fallbackPath in fallbackPaths) {
-      final wechatFile = File(fallbackPath);
-      if (wechatFile.existsSync()) {
-        final directory = path.dirname(fallbackPath);
-        return directory;
+    for (final drive in drives) {
+      for (final commonPath in commonPaths) {
+        final fullPath = '$drive:$commonPath';
+        final wechatFile = File(fullPath);
+        if (wechatFile.existsSync()) {
+          final directory = path.dirname(fullPath);
+          return directory;
+        }
       }
     }
     
     return null;
   }
 
-  static String? getWeChatVersion() {
+  static Future<String?> getWeChatVersion() async {
     try {
-      final wechatDir = getWeChatDirectory();
+      final wechatDir = await getWeChatDirectory();
       if (wechatDir == null) return null;
       
       final dir = Directory(wechatDir);
@@ -492,15 +511,27 @@ class DllInjector {
 
   static Future<String?> downloadDll(String version) async {
     try {
+      final tempDir = Directory.systemTemp;
+      final dllPath = path.join(tempDir.path, 'wx_key-$version.dll');
+      final dllFile = File(dllPath);
+      
+      // 先检查本地是否已有该DLL文件
+      if (await dllFile.exists()) {
+        final fileSize = await dllFile.length();
+        // 检查文件大小是否合理（至少1KB，避免损坏的文件）
+        if (fileSize > 1024) {
+          return dllPath;
+        }
+        // 文件损坏，删除后重新下载
+        await dllFile.delete();
+      }
+      
+      // 本地没有或文件损坏，从GitHub下载
       final url = 'https://github.com/ycccccccy/wx_key/releases/download/dlls/wx_key-$version.dll';
       
       final response = await http.get(Uri.parse(url));
       
       if (response.statusCode == 200) {
-        final tempDir = Directory.systemTemp;
-        final dllPath = path.join(tempDir.path, 'wx_key-$version.dll');
-        final dllFile = File(dllPath);
-        
         await dllFile.writeAsBytes(response.bodyBytes);
         return dllPath;
       } else {

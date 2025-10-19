@@ -1,174 +1,30 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:path/path.dart' as path;
 import 'package:url_launcher/url_launcher.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:window_manager/window_manager.dart';
 import 'dart:io';
 import 'dart:async';
 import 'services/dll_injector.dart';
 import 'services/key_storage.dart';
 import 'services/pipe_listener.dart';
 
-void main() {
-  runApp(const MyApp());
-}
-
-/// 动画提示组件
-class AnimatedToast extends StatefulWidget {
-  final String message;
-  final Color backgroundColor;
-  final IconData icon;
-  final Duration duration;
-
-  const AnimatedToast({
-    super.key,
-    required this.message,
-    required this.backgroundColor,
-    required this.icon,
-    this.duration = const Duration(seconds: 3),
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await windowManager.ensureInitialized();
+  
+  // 设置窗口选项，防止默认关闭行为
+  WindowOptions windowOptions = const WindowOptions(
+    center: true,
+    skipTaskbar: false,
+  );
+  
+  windowManager.waitUntilReadyToShow(windowOptions, () async {
+    await windowManager.show();
+    await windowManager.focus();
   });
-
-  @override
-  State<AnimatedToast> createState() => _AnimatedToastState();
-}
-
-class _AnimatedToastState extends State<AnimatedToast>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
-  late Animation<double> _scaleAnimation;
-  late Animation<double> _opacityAnimation;
-  late Animation<Offset> _slideAnimation;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(
-      duration: const Duration(milliseconds: 300),
-      vsync: this,
-    );
-
-    _scaleAnimation = Tween<double>(
-      begin: 0.8,
-      end: 1.0,
-    ).animate(CurvedAnimation(
-      parent: _controller,
-      curve: Curves.elasticOut,
-    ));
-
-    _opacityAnimation = Tween<double>(
-      begin: 0.0,
-      end: 1.0,
-    ).animate(CurvedAnimation(
-      parent: _controller,
-      curve: Curves.easeOut,
-    ));
-
-    _slideAnimation = Tween<Offset>(
-      begin: const Offset(0, 1),
-      end: Offset.zero,
-    ).animate(CurvedAnimation(
-      parent: _controller,
-      curve: Curves.easeOutBack,
-    ));
-
-    _controller.forward();
-
-    // 自动隐藏
-    Future.delayed(widget.duration, () {
-      if (mounted) {
-        _hide();
-      }
-    });
-  }
-
-  void _hide() async {
-    await _controller.reverse();
-    if (mounted) {
-      Navigator.of(context).pop();
-    }
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: Colors.transparent,
-      child: Align(
-        alignment: Alignment.bottomCenter,
-        child: Padding(
-          padding: const EdgeInsets.only(bottom: 60),
-          child: AnimatedBuilder(
-            animation: _controller,
-            builder: (context, child) {
-              return Transform.scale(
-                scale: _scaleAnimation.value,
-                child: Opacity(
-                  opacity: _opacityAnimation.value,
-                  child: SlideTransition(
-                    position: _slideAnimation,
-                    child: Container(
-                      constraints: const BoxConstraints(
-                        maxWidth: 350,
-                        minWidth: 200,
-                      ),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 20,
-                        vertical: 16,
-                      ),
-                      decoration: BoxDecoration(
-                        color: widget.backgroundColor,
-                        borderRadius: BorderRadius.circular(16),
-                        boxShadow: [
-                          BoxShadow(
-                            color: widget.backgroundColor.withOpacity(0.3),
-                            blurRadius: 20,
-                            offset: const Offset(0, -8),
-                          ),
-                        ],
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.all(8),
-                            decoration: BoxDecoration(
-                              color: Colors.white.withOpacity(0.2),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Icon(
-                              widget.icon,
-                              color: Colors.white,
-                              size: 20,
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Flexible(
-                            child: Text(
-                              widget.message,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 16,
-                                fontWeight: FontWeight.w600,
-                                fontFamily: 'HarmonyOS_SansSC',
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              );
-            },
-          ),
-        ),
-      ),
-    );
-  }
+  
+  runApp(const MyApp());
 }
 
 /// 显示动画提示的全局方法
@@ -179,18 +35,131 @@ void showAnimatedToast(
   required IconData icon,
   Duration duration = const Duration(seconds: 3),
 }) {
-  showDialog(
-    context: context,
-    barrierDismissible: true,
-    barrierColor: Colors.transparent,
-    useSafeArea: false,
-    builder: (context) => AnimatedToast(
-      message: message,
-      backgroundColor: backgroundColor,
-      icon: icon,
-      duration: duration,
+  final overlay = Overlay.of(context);
+  late OverlayEntry overlayEntry;
+  
+  // 创建动画控制器
+  final animationController = AnimationController(
+    duration: const Duration(milliseconds: 300),
+    vsync: overlay,
+  );
+
+  final scaleAnimation = Tween<double>(
+    begin: 0.8,
+    end: 1.0,
+  ).animate(CurvedAnimation(
+    parent: animationController,
+    curve: Curves.elasticOut,
+  ));
+
+  final opacityAnimation = Tween<double>(
+    begin: 0.0,
+    end: 1.0,
+  ).animate(CurvedAnimation(
+    parent: animationController,
+    curve: Curves.easeOut,
+  ));
+
+  final slideAnimation = Tween<Offset>(
+    begin: const Offset(0, 1),
+    end: Offset.zero,
+  ).animate(CurvedAnimation(
+    parent: animationController,
+    curve: Curves.easeOutBack,
+  ));
+
+  // 创建 overlay entry
+  overlayEntry = OverlayEntry(
+    builder: (context) => Positioned(
+      bottom: 60,
+      left: 0,
+      right: 0,
+      child: IgnorePointer(
+        child: Material(
+          color: Colors.transparent,
+          child: Center(
+            child: AnimatedBuilder(
+              animation: animationController,
+              builder: (context, child) {
+                return Transform.scale(
+                  scale: scaleAnimation.value,
+                  child: Opacity(
+                    opacity: opacityAnimation.value,
+                    child: SlideTransition(
+                      position: slideAnimation,
+                      child: Container(
+                        constraints: const BoxConstraints(
+                          maxWidth: 350,
+                          minWidth: 200,
+                        ),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 20,
+                          vertical: 16,
+                        ),
+                        decoration: BoxDecoration(
+                          color: backgroundColor,
+                          borderRadius: BorderRadius.circular(16),
+                          boxShadow: [
+                            BoxShadow(
+                              color: backgroundColor.withOpacity(0.3),
+                              blurRadius: 20,
+                              offset: const Offset(0, -8),
+                            ),
+                          ],
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(8),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withOpacity(0.2),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Icon(
+                                icon,
+                                color: Colors.white,
+                                size: 20,
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Flexible(
+                              child: Text(
+                                message,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                  fontFamily: 'HarmonyOS_SansSC',
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+      ),
     ),
   );
+
+  // 插入 overlay
+  overlay.insert(overlayEntry);
+  
+  // 播放动画
+  animationController.forward();
+
+  // 自动隐藏
+  Future.delayed(duration, () async {
+    await animationController.reverse();
+    overlayEntry.remove();
+    animationController.dispose();
+  });
 }
 
 class MyApp extends StatelessWidget {
@@ -239,12 +208,11 @@ class MyHomePage extends StatefulWidget {
   State<MyHomePage> createState() => _MyHomePageState();
 }
 
-class _MyHomePageState extends State<MyHomePage> {
+class _MyHomePageState extends State<MyHomePage> with WindowListener {
   bool _isWechatRunning = false;
   bool _isDllInjected = false;
   bool _isLoading = false;
   String _statusMessage = '未检测到微信进程';
-  String _logFilePath = '';
   
   // 新增状态变量
   String? _extractedKey;
@@ -257,11 +225,17 @@ class _MyHomePageState extends State<MyHomePage> {
   // 日志相关
   final List<Map<String, String>> _logMessages = [];
   final int _maxLogMessages = 10;
+  
+  // 控制状态轮询
+  bool _isPolling = false;
 
   @override
   void initState() {
     super.initState();
-    _initLogPath();
+    windowManager.addListener(this);
+    // 防止默认关闭行为，让我们可以自定义关闭逻辑
+    windowManager.setPreventClose(true);
+    _isPolling = true;
     _loadSavedData();
     _checkWechatStatus();
     _detectWeChatVersion();
@@ -270,26 +244,43 @@ class _MyHomePageState extends State<MyHomePage> {
 
   @override
   void dispose() {
-    // 确保释放所有资源
-    _backupMonitorTimer?.cancel();
-    PipeListener.stopListening();
+    windowManager.removeListener(this);
     super.dispose();
   }
 
-  Future<void> _initLogPath() async {
-    try {
-      final userProfile = Platform.environment['USERPROFILE'] ?? 'C:\\Users\\cc';
-      final logPath = path.join(userProfile, 'Documents', 'WechatKeyHunter_Log.txt');
-      
-      setState(() {
-        _logFilePath = logPath;
-      });
-      
-    } catch (e) {
-      setState(() {
-        _logFilePath = 'C:\\Users\\cc\\Documents\\WechatKeyHunter_Log.txt';
-      });
-    }
+  @override
+  void onWindowClose() async {
+    // 阻止默认关闭行为，先清理资源
+    await windowManager.hide();
+    // 窗口关闭时清理所有资源
+    await _cleanupResources();
+    // 等待一段时间确保所有资源都被释放
+    await Future.delayed(const Duration(milliseconds: 500));
+    // 销毁窗口并退出进程
+    await windowManager.destroy();
+    exit(0);
+  }
+
+  /// 清理所有资源
+  Future<void> _cleanupResources() async {
+    print('[清理] 开始清理资源...');
+    
+    // 停止状态轮询
+    _isPolling = false;
+    print('[清理] 状态轮询已停止');
+    
+    // 取消定时器
+    _backupMonitorTimer?.cancel();
+    _backupMonitorTimer = null;
+    print('[清理] 定时器已取消');
+    
+    // 停止管道监听和清理 isolate
+    await PipeListener.stopListening();
+    print('[清理] 管道监听已停止');
+    
+    // 等待一小段时间确保 isolate 完全退出
+    await Future.delayed(const Duration(milliseconds: 300));
+    print('[清理] 资源清理完成');
   }
 
   /// 加载保存的数据
@@ -310,7 +301,7 @@ class _MyHomePageState extends State<MyHomePage> {
   /// 检测微信版本
   Future<void> _detectWeChatVersion() async {
     try {
-      final version = DllInjector.getWeChatVersion();
+      final version = await DllInjector.getWeChatVersion();
       if (version != null) {
         setState(() {
           _wechatVersion = version;
@@ -320,7 +311,13 @@ class _MyHomePageState extends State<MyHomePage> {
         setState(() {
           _statusMessage = '未找到微信安装目录';
         });
-        _showAnimatedToast('未找到微信安装目录，请检查安装路径', Colors.red, Icons.error);
+        _showAnimatedToast('未找到微信安装目录', Colors.orange, Icons.warning);
+        // 延迟弹出手动选择对话框
+        Future.delayed(const Duration(milliseconds: 500), () {
+          if (mounted) {
+            _showManualSelectDialog();
+          }
+        });
       }
     } catch (e) {
     }
@@ -435,7 +432,7 @@ class _MyHomePageState extends State<MyHomePage> {
   Future<void> _stopPipeListenerDelayed() async {
     // 等待3秒，确保所有消息都已接收
     await Future.delayed(const Duration(seconds: 3));
-    await PipeListener.stopListening();
+    await _cleanupResources();
   }
 
   /// 启动密钥获取超时计时器
@@ -443,7 +440,7 @@ class _MyHomePageState extends State<MyHomePage> {
     // 60秒后如果还没有获取到密钥，停止监听
     Future.delayed(const Duration(seconds: 60), () async {
       if (mounted && _extractedKey == null && _isDllInjected) {
-        await PipeListener.stopListening();
+        await _cleanupResources();
         setState(() {
           _statusMessage = '密钥获取超时，请重新尝试';
         });
@@ -454,9 +451,15 @@ class _MyHomePageState extends State<MyHomePage> {
   /// 自动化注入流程：下载DLL -> 关闭微信 -> 启动微信 -> 等待窗口 -> 注入
   Future<void> _autoInjectDll() async {
     if (_wechatVersion == null) {
-      _showAnimatedToast('未检测到微信版本', Colors.red, Icons.error);
+      _addLogMessage('ERROR', '未检测到微信版本');
       return;
     }
+
+    // 清除之前的提取状态，允许重新提取
+    setState(() {
+      _extractedKey = null;
+      _isStoppingListener = false;
+    });
 
     // 启动管道监听
     await _startPipeListener();
@@ -465,27 +468,30 @@ class _MyHomePageState extends State<MyHomePage> {
       _isLoading = true;
       _statusMessage = '准备开始自动注入...';
     });
+    _addLogMessage('INFO', '准备开始自动注入...');
 
     try {
       // 1. 下载DLL
+      _addLogMessage('INFO', '正在从GitHub下载DLL文件');
       setState(() {
         _statusMessage = '正在从GitHub下载DLL文件';
       });
 
       final dllPath = await DllInjector.downloadDll(_wechatVersion!);
       if (dllPath == null) {
+        _addLogMessage('ERROR', '版本未适配');
         setState(() {
           _isLoading = false;
           _statusMessage = '版本未适配';
         });
-        // 停止管道监听
-        await PipeListener.stopListening();
+        // 停止管道监听并清理资源
+        await _cleanupResources();
         // 显示版本未适配弹窗
         _showVersionNotSupportedDialog();
         return;
       }
 
-      _showAnimatedToast('DLL下载成功', Colors.green, Icons.check_circle);
+      _addLogMessage('SUCCESS', 'DLL下载成功');
 
       // 2. 检查微信是否运行，如果运行则请求用户确认关闭
       if (_isWechatRunning) {
@@ -501,11 +507,12 @@ class _MyHomePageState extends State<MyHomePage> {
         );
         
         if (!shouldClose) {
+          _addLogMessage('WARNING', '用户取消操作');
           setState(() {
             _statusMessage = '用户取消操作';
           });
-          // 用户取消，停止管道监听
-          await PipeListener.stopListening();
+          // 用户取消，停止管道监听并清理资源
+          await _cleanupResources();
           return;
         }
         
@@ -513,20 +520,22 @@ class _MyHomePageState extends State<MyHomePage> {
           _isLoading = true;
           _statusMessage = '正在关闭现有微信进程...';
         });
+        _addLogMessage('INFO', '正在关闭现有微信进程...');
         
         DllInjector.killWeChatProcesses();
         await Future.delayed(const Duration(seconds: 2));
-        _showAnimatedToast('已关闭现有微信进程', Colors.green, Icons.info);
+        _addLogMessage('SUCCESS', '已关闭现有微信进程');
       }
 
       // 3. 启动微信
+      _addLogMessage('INFO', '正在启动微信...');
       setState(() {
         _statusMessage = '正在启动微信...';
       });
 
       final launched = await DllInjector.launchWeChat();
       if (!launched) {
-        _showAnimatedToast('微信启动失败', Colors.red, Icons.error);
+        _addLogMessage('ERROR', '微信启动失败');
         setState(() {
           _isLoading = false;
           _statusMessage = '微信启动失败';
@@ -534,16 +543,17 @@ class _MyHomePageState extends State<MyHomePage> {
         return;
       }
 
-      _showAnimatedToast('微信启动成功', Colors.green, Icons.check_circle);
+      _addLogMessage('SUCCESS', '微信启动成功');
 
       // 4. 等待微信窗口出现
+      _addLogMessage('INFO', '等待微信窗口出现...');
       setState(() {
         _statusMessage = '等待微信窗口出现...';
       });
 
       final windowAppeared = await DllInjector.waitForWeChatWindow(maxWaitSeconds: 15);
       if (!windowAppeared) {
-        _showAnimatedToast('等待微信窗口超时', Colors.orange, Icons.warning);
+        _addLogMessage('WARNING', '等待微信窗口超时');
         setState(() {
           _isLoading = false;
           _statusMessage = '等待微信窗口超时';
@@ -552,10 +562,11 @@ class _MyHomePageState extends State<MyHomePage> {
       }
 
       // 5. 延迟几秒，等待微信完全初始化
+      _addLogMessage('INFO', '等待微信完全启动，请不要点击微信任何按键');
       setState(() {
         _statusMessage = '等待微信完全启动...请不要点击微信任何按键';
       });
-      for (int i = 5; i > 0; i--) {
+      for (int i = 3; i > 0; i--) {
         setState(() {
           _statusMessage = '等待微信完全启动... ($i秒)，请不要点击微信任何按键';
         });
@@ -563,6 +574,7 @@ class _MyHomePageState extends State<MyHomePage> {
       }
 
       // 6. 注入DLL
+      _addLogMessage('INFO', '正在注入DLL...');
       setState(() {
         _statusMessage = '正在注入DLL...';
       });
@@ -570,50 +582,33 @@ class _MyHomePageState extends State<MyHomePage> {
       final success = DllInjector.injectDll('Weixin.exe', dllPath);
       
       if (success) {
+        _addLogMessage('SUCCESS', 'DLL注入成功！等待密钥获取...');
         setState(() {
           _isDllInjected = true;
           _statusMessage = 'DLL注入成功！等待密钥获取...';
         });
-        _showAnimatedToast('DLL注入成功！', Colors.green, Icons.check_circle);
-        
-        // 注入成功后，清理DLL文件
-        _cleanupDllFile(dllPath);
         
         // 设置超时，如果一段时间内没有收到密钥，则停止监听
         _startKeyTimeout();
       } else {
-        _showAnimatedToast('DLL注入失败！请确保以管理员身份运行', Colors.red, Icons.error);
+        _addLogMessage('ERROR', 'DLL注入失败，请确保以管理员身份运行');
         setState(() {
           _statusMessage = 'DLL注入失败';
         });
-        // 注入失败也清理DLL
-        _cleanupDllFile(dllPath);
-        // 停止管道监听
-        await PipeListener.stopListening();
+        // 停止管道监听并清理资源
+        await _cleanupResources();
       }
     } catch (e) {
-      _showAnimatedToast('自动注入过程出错: $e', Colors.red, Icons.error);
+      _addLogMessage('ERROR', '自动注入过程出错: $e');
       setState(() {
         _statusMessage = '自动注入失败: $e';
       });
-      // 出错时停止管道监听
-      await PipeListener.stopListening();
+      // 出错时停止管道监听并清理资源
+      await _cleanupResources();
     } finally {
       setState(() {
         _isLoading = false;
       });
-    }
-  }
-
-  /// 清理下载的DLL文件
-  Future<void> _cleanupDllFile(String dllPath) async {
-    try {
-      await Future.delayed(const Duration(seconds: 2)); // 等待DLL加载到内存
-      final dllFile = File(dllPath);
-      if (await dllFile.exists()) {
-        await dllFile.delete();
-      }
-    } catch (e) {
     }
   }
 
@@ -633,34 +628,60 @@ class _MyHomePageState extends State<MyHomePage> {
   // 定期检查微信状态
   void _startStatusPolling() {
     Future.delayed(const Duration(seconds: 2), () {
-      if (mounted) {
+      if (mounted && _isPolling) {
         _checkWechatStatus();
         _startStatusPolling();
       }
     });
   }
 
+  bool _isStoppingListener = false;
+  
   Future<void> _checkWechatStatus() async {
     final isRunning = DllInjector.isProcessRunning('Weixin.exe');
     if (mounted) {
       setState(() {
         _isWechatRunning = isRunning;
+        
+        // 微信不运行时，重置注入状态并延迟停止监听
+        if (!isRunning && _isDllInjected && !_isStoppingListener) {
+          _isDllInjected = false;
+          _isStoppingListener = true;
+          
+          // 微信崩溃时DLL会发送密钥，延迟3秒停止监听以确保接收到密钥
+          Future.delayed(const Duration(seconds: 3), () async {
+            if (mounted) {
+              await _cleanupResources();
+              _isStoppingListener = false;
+              
+              // 如果还没有获取到密钥，提示用户
+              if (_extractedKey == null && mounted) {
+                setState(() {
+                  if (_statusMessage.contains('监听')) {
+                    _statusMessage = '微信已退出，未获取到密钥';
+                  }
+                });
+                _addLogMessage('WARNING', '微信已退出，未获取到密钥');
+              }
+            }
+          });
+        }
+        
         // 如果已经获取到密钥，不要覆盖状态消息
         if (!_isLoading && _extractedKey == null) {
-        if (isRunning) {
+          if (isRunning) {
             if (!_isDllInjected) {
               _statusMessage = _wechatVersion != null 
                   ? '检测到微信进程 (版本: $_wechatVersion)'
                   : '检测到微信进程';
+            } else {
+              _statusMessage = '正在监听密钥，请前往微信登录即可获取密钥';
+            }
           } else {
-            _statusMessage = '正在监听密钥，请前往微信登录即可获取密钥';
-          }
-        } else {
             _statusMessage = _wechatVersion != null 
                 ? '未检测到微信进程 (检测到版本: $_wechatVersion)'
                 : '未检测到微信进程';
-          _isDllInjected = false;
-        }
+          }
         }
       });
     }
@@ -884,6 +905,161 @@ class _MyHomePageState extends State<MyHomePage> {
     }
   }
 
+  /// 显示手动选择微信目录对话框
+  Future<void> _showManualSelectDialog() async {
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          title: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.orange.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(
+                  Icons.folder_open,
+                  color: Colors.orange,
+                  size: 24,
+                ),
+              ),
+              const SizedBox(width: 12),
+              const Expanded(
+                child: Text(
+                  '选择微信安装目录',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w600,
+                    fontFamily: 'HarmonyOS_SansSC',
+                  ),
+                ),
+              ),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                '未能自动检测到微信安装目录，请手动选择微信的安装文件夹。',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontFamily: 'HarmonyOS_SansSC',
+                  height: 1.5,
+                ),
+              ),
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade100,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '示例路径：',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        fontFamily: 'HarmonyOS_SansSC',
+                      ),
+                    ),
+                    SizedBox(height: 4),
+                    Text(
+                      'D:\\Program Files\\Tencent\\Weixin',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontFamily: 'Courier New',
+                        color: Colors.black87,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text(
+                '取消',
+                style: TextStyle(
+                  color: Colors.grey.shade600,
+                  fontWeight: FontWeight.w500,
+                  fontFamily: 'HarmonyOS_SansSC',
+                ),
+              ),
+            ),
+            ElevatedButton.icon(
+              onPressed: () {
+                Navigator.of(context).pop();
+                _selectWeChatDirectory();
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF07c160),
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                elevation: 0,
+              ),
+              icon: const Icon(Icons.folder_open, size: 18),
+              label: const Text(
+                '选择目录',
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  fontFamily: 'HarmonyOS_SansSC',
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  /// 手动选择微信目录
+  Future<void> _selectWeChatDirectory() async {
+    try {
+      final result = await FilePicker.platform.getDirectoryPath(
+        dialogTitle: '选择微信安装目录',
+      );
+
+      if (result == null) {
+        return;
+      }
+
+      // 验证目录中是否有 Weixin.exe 或 WeChat.exe
+      final weixinPath = '${result}\\Weixin.exe';
+      final wechatPath = '${result}\\WeChat.exe';
+      
+      if (!File(weixinPath).existsSync() && !File(wechatPath).existsSync()) {
+        _showAnimatedToast('所选目录中未找到微信程序', Colors.red, Icons.error);
+        return;
+      }
+
+      // 保存目录
+      final saved = await KeyStorage.saveWechatDirectory(result);
+      if (saved) {
+        _showAnimatedToast('微信目录已保存', Colors.green, Icons.check_circle);
+        // 重新检测版本
+        await _detectWeChatVersion();
+      } else {
+        _showAnimatedToast('保存目录失败', Colors.red, Icons.error);
+      }
+    } catch (e) {
+      _showAnimatedToast('选择目录失败: $e', Colors.red, Icons.error);
+    }
+  }
+
   Widget _buildSimpleActionButton() {
     final isEnabled = !_isLoading && _wechatVersion != null;
     
@@ -1102,39 +1278,62 @@ class _MyHomePageState extends State<MyHomePage> {
                   ),
                 ],
               ),
-              child: Column(
+              child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    '微信密钥提取工具',
-                    style: TextStyle(
-                      fontSize: 26,
-                      fontWeight: FontWeight.w700,
-                      color: Colors.grey.shade900,
-                      fontFamily: 'HarmonyOS_SansSC',
-                      letterSpacing: 0.2,
-                      height: 1.2,
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '微信密钥提取工具',
+                          style: TextStyle(
+                            fontSize: 26,
+                            fontWeight: FontWeight.w700,
+                            color: Colors.grey.shade900,
+                            fontFamily: 'HarmonyOS_SansSC',
+                            letterSpacing: 0.2,
+                            height: 1.2,
+                          ),
+                        ),
+                        if (_wechatVersion != null) ...[
+                          const SizedBox(height: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF07c160).withOpacity(0.08),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Text(
+                              '微信版本 $_wechatVersion',
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: const Color(0xFF07c160).withOpacity(0.9),
+                                fontFamily: 'HarmonyOS_SansSC',
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
                   ),
-                  if (_wechatVersion != null) ...[
-                    const SizedBox(height: 8),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF07c160).withOpacity(0.08),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Text(
-                        '微信版本 $_wechatVersion',
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: const Color(0xFF07c160).withOpacity(0.9),
-                          fontFamily: 'HarmonyOS_SansSC',
-                          fontWeight: FontWeight.w500,
-                        ),
+                  // 设置按钮
+                  IconButton(
+                    onPressed: _selectWeChatDirectory,
+                    tooltip: '手动选择微信目录',
+                    icon: Icon(
+                      Icons.settings_outlined,
+                      color: Colors.grey.shade600,
+                      size: 22,
+                    ),
+                    style: IconButton.styleFrom(
+                      backgroundColor: Colors.grey.shade100,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
                       ),
                     ),
-                  ],
+                  ),
                 ],
               ),
             ),
@@ -1191,7 +1390,7 @@ class _MyHomePageState extends State<MyHomePage> {
                     const SizedBox(height: 20),
                     
                     // 操作按钮
-                    if (!_isDllInjected)
+                    if (!_isDllInjected && !_isLoading)
                       _buildSimpleActionButton(),
                     const SizedBox(height: 32),
                     

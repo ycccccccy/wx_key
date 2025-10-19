@@ -6,6 +6,7 @@ class KeyStorage {
   static const String _keyWechatDbKey = 'wechat_db_key';
   static const String _keyTimestamp = 'key_timestamp';
   static const String _keyDllPath = 'dll_path';
+  static const String _keyWechatDirectory = 'wechat_directory';
 
   /// 保存微信数据库密钥
   /// [key] 32字节密钥的十六进制字符串（64个字符）
@@ -127,6 +128,39 @@ class KeyStorage {
     } catch (e) {
       print('获取密钥信息失败: $e');
       return null;
+    }
+  }
+
+  /// 保存微信安装目录
+  static Future<bool> saveWechatDirectory(String directory) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return await prefs.setString(_keyWechatDirectory, directory);
+    } catch (e) {
+      print('保存微信目录失败: $e');
+      return false;
+    }
+  }
+
+  /// 获取保存的微信安装目录
+  static Future<String?> getWechatDirectory() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return prefs.getString(_keyWechatDirectory);
+    } catch (e) {
+      print('读取微信目录失败: $e');
+      return null;
+    }
+  }
+
+  /// 清除保存的微信目录
+  static Future<bool> clearWechatDirectory() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return await prefs.remove(_keyWechatDirectory);
+    } catch (e) {
+      print('清除微信目录失败: $e');
+      return false;
     }
   }
 }

@@ -16,8 +16,10 @@ class PipeListener {
   static StreamController<Map<String, String>>? _logController;
   static Isolate? _keyListenerIsolate;
   static Isolate? _logListenerIsolate;
-  static SendPort? _keySendPort;
-  static SendPort? _logSendPort;
+  static ReceivePort? _keyReceivePort;
+  static ReceivePort? _logReceivePort;
+  static SendPort? _keyControlSendPort;
+  static SendPort? _logControlSendPort;
 
   /// 获取密钥流
   /// 当收到密钥时会触发此流
@@ -43,36 +45,52 @@ class PipeListener {
 
     try {
       // 创建密钥接收端口
-      final keyReceivePort = ReceivePort();
-      _keySendPort = keyReceivePort.sendPort;
-
+      _keyReceivePort = ReceivePort();
+      
       // 创建日志接收端口
-      final logReceivePort = ReceivePort();
-      _logSendPort = logReceivePort.sendPort;
+      _logReceivePort = ReceivePort();
+
+      // 创建密钥隔离的通信参数
+      final keyParams = _IsolateParams(
+        dataSendPort: _keyReceivePort!.sendPort,
+        pipeName: _keyPipeName,
+        isKeyPipe: true,
+      );
+
+      // 创建日志隔离的通信参数
+      final logParams = _IsolateParams(
+        dataSendPort: _logReceivePort!.sendPort,
+        pipeName: _logPipeName,
+        isKeyPipe: false,
+      );
 
       // 启动密钥监听隔离
       _keyListenerIsolate = await Isolate.spawn(
-        _keyPipeListenerIsolate,
-        _keySendPort!,
+        _pipeListenerIsolate,
+        keyParams,
       );
 
       // 启动日志监听隔离
       _logListenerIsolate = await Isolate.spawn(
-        _logPipeListenerIsolate,
-        _logSendPort!,
+        _pipeListenerIsolate,
+        logParams,
       );
 
       // 监听来自密钥隔离的消息
-      keyReceivePort.listen((message) {
-        if (message is String) {
+      _keyReceivePort!.listen((message) {
+        if (message is SendPort) {
+          _keyControlSendPort = message;
+        } else if (message is String) {
           print('[PipeListener] 收到密钥数据');
           _keyController?.add(message);
         }
       });
 
       // 监听来自日志隔离的消息
-      logReceivePort.listen((message) {
-        if (message is String) {
+      _logReceivePort!.listen((message) {
+        if (message is SendPort) {
+          _logControlSendPort = message;
+        } else if (message is String) {
           // 解析日志消息格式: "TYPE:message"
           final parts = message.split(':');
           if (parts.length >= 2) {
@@ -94,50 +112,94 @@ class PipeListener {
 
   /// 停止监听命名管道
   static Future<void> stopListening() async {
-    if (!_isListening) return;
+    if (!_isListening) {
+      print('[PipeListener] 已经停止，无需重复操作');
+      return;
+    }
 
+    print('[PipeListener] 开始停止监听...');
+    
     try {
-      _keyListenerIsolate?.kill();
+      // 发送停止信号给 isolate
+      _keyControlSendPort?.send('stop');
+      _logControlSendPort?.send('stop');
+      print('[PipeListener] 已发送停止信号');
+      
+      // 等待一小段时间让 isolate 正常退出
+      await Future.delayed(const Duration(milliseconds: 200));
+      
+      // 强制关闭 isolate
+      _keyListenerIsolate?.kill(priority: Isolate.immediate);
       _keyListenerIsolate = null;
-      _logListenerIsolate?.kill();
+      _logListenerIsolate?.kill(priority: Isolate.immediate);
       _logListenerIsolate = null;
-      _keySendPort = null;
-      _logSendPort = null;
+      print('[PipeListener] Isolate 已强制关闭');
+      
+      // 关闭接收端口
+      _keyReceivePort?.close();
+      _keyReceivePort = null;
+      _logReceivePort?.close();
+      _logReceivePort = null;
+      
+      _keyControlSendPort = null;
+      _logControlSendPort = null;
       _isListening = false;
+      
       await _keyController?.close();
       _keyController = null;
       await _logController?.close();
       _logController = null;
-      print('[PipeListener] 命名管道监听已停止');
+      print('[PipeListener] 命名管道监听已完全停止');
     } catch (e) {
       print('[PipeListener] 停止监听失败: $e');
+      // 即使出错也要设置状态
+      _isListening = false;
     }
   }
 
   /// 检查是否正在监听
   static bool get isListening => _isListening;
 
-
-  /// 密钥管道监听隔离函数
-  static void _keyPipeListenerIsolate(SendPort sendPort) {
-    while (true) {
+  /// 管道监听隔离函数
+  static void _pipeListenerIsolate(_IsolateParams params) {
+    // 创建控制接收端口用于接收停止信号
+    final controlPort = ReceivePort();
+    params.dataSendPort.send(controlPort.sendPort);
+    
+    bool shouldStop = false;
+    int consecutiveErrors = 0;
+    final maxConsecutiveErrors = 5;
+    
+    // 监听停止信号
+    controlPort.listen((message) {
+      if (message == 'stop') {
+        shouldStop = true;
+        controlPort.close();
+      }
+    });
+    
+    while (!shouldStop) {
       try {
         // 创建命名管道
-        final pipeName = _keyPipeName.toNativeUtf16();
+        final pipeName = params.pipeName.toNativeUtf16();
         final hPipe = CreateNamedPipe(
           pipeName.cast(),
           PIPE_ACCESS_INBOUND,
           PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
-          1, // 最大实例数
-          1024, // 输出缓冲区大小
-          1024, // 输入缓冲区大小
-          0, // 默认超时
-          nullptr, // 默认安全属性
+          params.isKeyPipe ? 1 : 10,
+          1024,
+          1024,
+          0,
+          nullptr,
         );
 
         if (hPipe == INVALID_HANDLE_VALUE) {
           free(pipeName);
-          sleep(const Duration(seconds: 2));
+          consecutiveErrors++;
+          if (consecutiveErrors >= maxConsecutiveErrors) {
+            break;
+          }
+          sleep(Duration(seconds: params.isKeyPipe ? 2 : 1));
           continue;
         }
 
@@ -148,85 +210,16 @@ class PipeListener {
           if (error != ERROR_PIPE_CONNECTED) {
             CloseHandle(hPipe);
             free(pipeName);
-            sleep(const Duration(milliseconds: 500));
-            continue;
-          }
-        }
-
-        // 读取数据 - 立即读取，不等待
-        final buffer = calloc<Uint8>(1024);
-        final bytesRead = calloc<DWORD>();
-
-        try {
-          // 设置管道为消息模式
-          final mode = calloc<Uint32>();
-          mode.value = PIPE_READMODE_MESSAGE;
-          SetNamedPipeHandleState(hPipe, mode, nullptr, nullptr);
-          free(mode);
-          
-          final readResult = ReadFile(hPipe, buffer.cast(), 1024, bytesRead, nullptr);
-          
-          if (readResult != 0 && bytesRead.value > 0) {
-            // 使用 UTF-8 解码，支持中文
-            final bytes = buffer.asTypedList(bytesRead.value);
-            final data = utf8.decode(bytes, allowMalformed: true).trim();
-            
-            if (data.isNotEmpty) {
-              sendPort.send(data);
+            consecutiveErrors++;
+            if (consecutiveErrors >= maxConsecutiveErrors) {
+              break;
             }
-          }
-        } finally {
-          free(buffer);
-          free(bytesRead);
-        }
-
-        // 断开连接
-        DisconnectNamedPipe(hPipe);
-        CloseHandle(hPipe);
-        free(pipeName);
-
-        // 短暂等待后重新创建管道
-        sleep(const Duration(milliseconds: 100));
-
-      } catch (e) {
-        sleep(const Duration(seconds: 5));
-      }
-    }
-  }
-
-  /// 日志管道监听隔离函数
-  static void _logPipeListenerIsolate(SendPort sendPort) {
-    while (true) {
-      try {
-        final pipeName = _logPipeName.toNativeUtf16();
-        final hPipe = CreateNamedPipe(
-          pipeName.cast(),
-          PIPE_ACCESS_INBOUND,
-          PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
-          10, // 允许多个实例
-          1024,
-          1024,
-          0,
-          nullptr,
-        );
-
-        if (hPipe == INVALID_HANDLE_VALUE) {
-          free(pipeName);
-          sleep(const Duration(seconds: 1));
-          continue;
-        }
-
-        final connected = ConnectNamedPipe(hPipe, nullptr);
-        if (connected == 0) {
-          final error = GetLastError();
-          if (error != ERROR_PIPE_CONNECTED) {
-            CloseHandle(hPipe);
-            free(pipeName);
-            sleep(const Duration(milliseconds: 100));
+            sleep(Duration(milliseconds: params.isKeyPipe ? 500 : 100));
             continue;
           }
         }
 
+        // 读取数据
         final buffer = calloc<Uint8>(1024);
         final bytesRead = calloc<DWORD>();
 
@@ -239,12 +232,12 @@ class PipeListener {
           final readResult = ReadFile(hPipe, buffer.cast(), 1024, bytesRead, nullptr);
           
           if (readResult != 0 && bytesRead.value > 0) {
-            // 使用 UTF-8 解码，支持中文
             final bytes = buffer.asTypedList(bytesRead.value);
             final data = utf8.decode(bytes, allowMalformed: true).trim();
             
             if (data.isNotEmpty) {
-              sendPort.send(data);
+              params.dataSendPort.send(data);
+              consecutiveErrors = 0;
             }
           }
         } finally {
@@ -255,11 +248,32 @@ class PipeListener {
         DisconnectNamedPipe(hPipe);
         CloseHandle(hPipe);
         free(pipeName);
-        sleep(const Duration(milliseconds: 50));
+
+        sleep(Duration(milliseconds: params.isKeyPipe ? 100 : 50));
 
       } catch (e) {
-        sleep(const Duration(seconds: 1));
+        consecutiveErrors++;
+        if (consecutiveErrors >= maxConsecutiveErrors) {
+          break;
+        }
+        sleep(Duration(seconds: params.isKeyPipe ? 5 : 1));
       }
     }
+    
+    controlPort.close();
   }
+
+}
+
+/// Isolate 参数类
+class _IsolateParams {
+  final SendPort dataSendPort;
+  final String pipeName;
+  final bool isKeyPipe;
+
+  _IsolateParams({
+    required this.dataSendPort,
+    required this.pipeName,
+    required this.isKeyPipe,
+  });
 }

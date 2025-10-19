@@ -52,6 +52,9 @@ dependencies:
   
   # For opening URLs in browser
   url_launcher: ^6.2.2
+  
+  # For window management
+  window_manager: ^0.3.7
 
 dev_dependencies:
   flutter_test:
