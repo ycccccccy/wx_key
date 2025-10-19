@@ -123,12 +123,344 @@ class DllInjector {
     }
   }
 
-  static String? getWeChatDirectory() {
-    const wechatPath = r'C:\Program Files\Tencent\Weixin\Weixin.exe';
-    final wechatFile = File(wechatPath);
+  /// 从注册表获取微信安装路径
+  static String? _getWeChatPathFromRegistry() {
     
-    if (wechatFile.existsSync()) {
-      return path.dirname(wechatPath);
+    // 1. 首先尝试从卸载信息中查找（最可靠的方法）
+    final uninstallPath = _findWeChatFromUninstall();
+    if (uninstallPath != null) {
+      return uninstallPath;
+    }
+    
+    // 2. 尝试从 App Paths 查找
+    final appPath = _findWeChatFromAppPaths();
+    if (appPath != null) {
+      return appPath;
+    }
+    
+    // 3. 尝试腾讯特定注册表路径
+    final tencentPath = _findWeChatFromTencentRegistry();
+    if (tencentPath != null) {
+      return tencentPath;
+    }
+    
+    return null;
+  }
+  
+  /// 从卸载信息注册表查找微信
+  static String? _findWeChatFromUninstall() {
+    
+    final uninstallKeys = [
+      r'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+      r'SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall',
+    ];
+    
+    final rootKeys = [HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER];
+    
+    for (final rootKey in rootKeys) {
+      for (final uninstallKey in uninstallKeys) {
+        final result = _searchUninstallKey(rootKey, uninstallKey);
+        if (result != null) {
+          return result;
+        }
+      }
+    }
+    
+    return null;
+  }
+  
+  /// 搜索卸载键下的所有子键
+  static String? _searchUninstallKey(int rootKey, String keyPath) {
+    final phkResult = calloc<HKEY>();
+    
+    try {
+      if (RegOpenKeyEx(rootKey, keyPath.toNativeUtf16(), 0, KEY_READ, phkResult) != ERROR_SUCCESS) {
+        return null;
+      }
+      
+      var index = 0;
+      final subKeyName = calloc<Uint16>(256);
+      
+      while (true) {
+        final subKeyNameLength = calloc<DWORD>();
+        subKeyNameLength.value = 256;
+        
+        final result = RegEnumKeyEx(
+          phkResult.value,
+          index,
+          subKeyName.cast(),
+          subKeyNameLength,
+          nullptr,
+          nullptr,
+          nullptr,
+          nullptr,
+        );
+        
+        free(subKeyNameLength);
+        
+        if (result != ERROR_SUCCESS) {
+          break;
+        }
+        
+        final subKeyNameStr = String.fromCharCodes(
+          subKeyName.asTypedList(256).takeWhile((c) => c != 0)
+        );
+        
+        // 检查是否是微信相关的键
+        if (subKeyNameStr.toLowerCase().contains('wechat') || 
+            subKeyNameStr.toLowerCase().contains('weixin') ||
+            subKeyNameStr.toLowerCase().contains('tencent')) {
+          
+          final fullPath = '$keyPath\\$subKeyNameStr';
+          final wechatPath = _readInstallLocationFromKey(rootKey, fullPath);
+          
+          if (wechatPath != null) {
+            free(subKeyName);
+            RegCloseKey(phkResult.value);
+            return wechatPath;
+          }
+        }
+        
+        index++;
+      }
+      
+      free(subKeyName);
+      RegCloseKey(phkResult.value);
+    } catch (e) {
+    } finally {
+      free(phkResult);
+    }
+    
+    return null;
+  }
+  
+  /// 从指定键读取安装位置
+  static String? _readInstallLocationFromKey(int rootKey, String keyPath) {
+    final phkResult = calloc<HKEY>();
+    
+    try {
+      if (RegOpenKeyEx(rootKey, keyPath.toNativeUtf16(), 0, KEY_READ, phkResult) != ERROR_SUCCESS) {
+        return null;
+      }
+      
+      // 尝试多个可能的值名称
+      final valueNames = [
+        'InstallLocation',
+        'InstallPath', 
+        'DisplayIcon',
+        'UninstallString',
+        'InstallDir',
+      ];
+      
+      for (final valueName in valueNames) {
+        final result = _queryRegistryValue(phkResult.value, valueName);
+        if (result != null && result.isNotEmpty) {
+          // 处理路径
+          var exePath = result;
+          
+          // 如果是 UninstallString 或 DisplayIcon，可能包含额外的参数或逗号
+          if (valueName == 'UninstallString' || valueName == 'DisplayIcon') {
+            exePath = exePath.split(',')[0].trim();
+            exePath = exePath.replaceAll('"', '');
+          }
+          
+          // 如果路径指向 exe 文件
+          if (exePath.toLowerCase().endsWith('.exe')) {
+            if (File(exePath).existsSync()) {
+              RegCloseKey(phkResult.value);
+              return exePath;
+            }
+            // 尝试在同目录找 Weixin.exe 或 WeChat.exe
+            final dir = path.dirname(exePath);
+            final weixinPath = path.join(dir, 'Weixin.exe');
+            if (File(weixinPath).existsSync()) {
+              RegCloseKey(phkResult.value);
+              return weixinPath;
+            }
+            final wechatPath = path.join(dir, 'WeChat.exe');
+            if (File(wechatPath).existsSync()) {
+              RegCloseKey(phkResult.value);
+              return wechatPath;
+            }
+          } else {
+            // 如果是目录路径
+            final weixinPath = path.join(exePath, 'Weixin.exe');
+            if (File(weixinPath).existsSync()) {
+              RegCloseKey(phkResult.value);
+              return weixinPath;
+            }
+            final wechatPath = path.join(exePath, 'WeChat.exe');
+            if (File(wechatPath).existsSync()) {
+              RegCloseKey(phkResult.value);
+              return wechatPath;
+            }
+          }
+        }
+      }
+      
+      RegCloseKey(phkResult.value);
+    } catch (e) {
+      // 忽略
+    } finally {
+      free(phkResult);
+    }
+    
+    return null;
+  }
+  
+  /// 从 App Paths 查找微信
+  static String? _findWeChatFromAppPaths() {
+    
+    final appNames = ['WeChat.exe', 'Weixin.exe'];
+    final rootKeys = [HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER];
+    
+    for (final rootKey in rootKeys) {
+      for (final appName in appNames) {
+        final keyPath = 'SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\$appName';
+        final phkResult = calloc<HKEY>();
+        
+        try {
+          if (RegOpenKeyEx(rootKey, keyPath.toNativeUtf16(), 0, KEY_READ, phkResult) == ERROR_SUCCESS) {
+            final result = _queryRegistryValue(phkResult.value, '');
+            RegCloseKey(phkResult.value);
+            
+            if (result != null && result.isNotEmpty && File(result).existsSync()) {
+              return result;
+            }
+          }
+        } catch (e) {
+          // 忽略
+        } finally {
+          free(phkResult);
+        }
+      }
+    }
+    
+    return null;
+  }
+  
+  /// 从腾讯特定注册表查找微信
+  static String? _findWeChatFromTencentRegistry() {
+    
+    final keyPaths = [
+      r'Software\Tencent\WeChat',
+      r'Software\Tencent\bugReport\WeChatWindows',
+      r'Software\WOW6432Node\Tencent\WeChat',
+      r'Software\Tencent\Weixin',
+    ];
+    
+    final valueNames = ['InstallPath', 'Install', 'Path', 'InstallDir'];
+    
+    for (final keyPath in keyPaths) {
+      final phkResult = calloc<HKEY>();
+      
+      try {
+        // 尝试 HKEY_CURRENT_USER
+        if (RegOpenKeyEx(HKEY_CURRENT_USER, keyPath.toNativeUtf16(), 0, KEY_READ, phkResult) == ERROR_SUCCESS) {
+          for (final valueName in valueNames) {
+            final result = _queryRegistryValue(phkResult.value, valueName);
+            if (result != null) {
+              RegCloseKey(phkResult.value);
+              return result;
+            }
+          }
+          RegCloseKey(phkResult.value);
+        }
+        
+        // 尝试 HKEY_LOCAL_MACHINE
+        if (RegOpenKeyEx(HKEY_LOCAL_MACHINE, keyPath.toNativeUtf16(), 0, KEY_READ, phkResult) == ERROR_SUCCESS) {
+          for (final valueName in valueNames) {
+            final result = _queryRegistryValue(phkResult.value, valueName);
+            if (result != null) {
+              RegCloseKey(phkResult.value);
+              return result;
+            }
+          }
+          RegCloseKey(phkResult.value);
+        }
+      } catch (e) {
+        // 忽略错误
+      } finally {
+        free(phkResult);
+      }
+    }
+    
+    return null;
+  }
+  
+  /// 从注册表键读取字符串值
+  static String? _queryRegistryValue(int hKey, String valueName) {
+    final lpType = calloc<DWORD>();
+    final lpcbData = calloc<DWORD>();
+    
+    try {
+      // 首先查询数据大小
+      if (RegQueryValueEx(hKey, valueName.toNativeUtf16(), nullptr, lpType, nullptr, lpcbData) == ERROR_SUCCESS) {
+        if (lpType.value == REG_SZ || lpType.value == REG_EXPAND_SZ) {
+          final buffer = calloc<Uint8>(lpcbData.value);
+          
+          try {
+            if (RegQueryValueEx(hKey, valueName.toNativeUtf16(), nullptr, lpType, buffer, lpcbData) == ERROR_SUCCESS) {
+              final result = String.fromCharCodes(
+                buffer.cast<Uint16>().asTypedList(lpcbData.value ~/ 2).takeWhile((c) => c != 0)
+              );
+              
+              // 如果路径不以 .exe 结尾，尝试拼接 Weixin.exe
+              if (result.isNotEmpty) {
+                if (result.toLowerCase().endsWith('.exe')) {
+                  return result;
+                } else {
+                  final weixinPath = path.join(result, 'Weixin.exe');
+                  if (File(weixinPath).existsSync()) {
+                    return weixinPath;
+                  }
+                  return result;
+                }
+              }
+            }
+          } finally {
+            free(buffer);
+          }
+        }
+      }
+    } catch (e) {
+      // 忽略错误
+    } finally {
+      free(lpType);
+      free(lpcbData);
+    }
+    
+    return null;
+  }
+
+  static String? getWeChatDirectory() {
+    
+    // 首先尝试从注册表获取路径
+    final wechatPath = _getWeChatPathFromRegistry();
+    
+    if (wechatPath != null) {
+      final wechatFile = File(wechatPath);
+      if (wechatFile.existsSync()) {
+        final directory = path.dirname(wechatPath);
+        return directory;
+      } else {
+      }
+    }
+    
+    // 如果注册表找不到，尝试常见的默认路径作为备选
+    final fallbackPaths = [
+      r'C:\Program Files\Tencent\WeChat\WeChat.exe',
+      r'C:\Program Files (x86)\Tencent\WeChat\WeChat.exe',
+      r'C:\Program Files\Tencent\Weixin\Weixin.exe',
+      r'C:\Program Files (x86)\Tencent\Weixin\Weixin.exe',
+    ];
+    
+    for (final fallbackPath in fallbackPaths) {
+      final wechatFile = File(fallbackPath);
+      if (wechatFile.existsSync()) {
+        final directory = path.dirname(fallbackPath);
+        return directory;
+      }
     }
     
     return null;
@@ -204,10 +536,28 @@ class DllInjector {
 
   static Future<bool> launchWeChat() async {
     try {
-      const wechatPath = r'C:\Program Files\Tencent\Weixin\Weixin.exe';
-      final wechatFile = File(wechatPath);
       
-      if (!await wechatFile.exists()) {
+      // 首先尝试从注册表获取路径
+      String? wechatPath = _getWeChatPathFromRegistry();
+      
+      // 如果注册表没找到，尝试常见的默认路径
+      if (wechatPath == null || !await File(wechatPath).exists()) {
+        final fallbackPaths = [
+          r'C:\Program Files\Tencent\WeChat\WeChat.exe',
+          r'C:\Program Files (x86)\Tencent\WeChat\WeChat.exe',
+          r'C:\Program Files\Tencent\Weixin\Weixin.exe',
+          r'C:\Program Files (x86)\Tencent\Weixin\Weixin.exe',
+        ];
+        
+        for (final fallbackPath in fallbackPaths) {
+          if (await File(fallbackPath).exists()) {
+            wechatPath = fallbackPath;
+            break;
+          }
+        }
+      }
+      
+      if (wechatPath == null || !await File(wechatPath).exists()) {
         return false;
       }
       
