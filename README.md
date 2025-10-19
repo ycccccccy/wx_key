@@ -12,6 +12,9 @@
 
 欢迎大家查看我的新项目：[EchoTrace - 一个本地、安全的微信聊天记录导出分析与年度报告应用](https://github.com/ycccccccy/echotrace)
 
+![效果截图](app.jpg)
+
+
 
 
 ## 支持版本
