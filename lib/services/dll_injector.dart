@@ -542,6 +542,35 @@ class DllInjector {
     }
   }
 
+  /// 清除DLL缓存
+  /// 删除所有已下载的DLL文件
+  /// 返回删除的文件数量
+  static Future<int> clearDllCache() async {
+    try {
+      final tempDir = Directory.systemTemp;
+      int count = 0;
+      
+      // 列出所有wx_key开头的dll文件
+      await for (final entity in tempDir.list()) {
+        if (entity is File) {
+          final fileName = path.basename(entity.path);
+          if (fileName.startsWith('wx_key-') && fileName.endsWith('.dll')) {
+            try {
+              await entity.delete();
+              count++;
+            } catch (e) {
+              // 忽略单个文件删除失败
+            }
+          }
+        }
+      }
+      
+      return count;
+    } catch (e) {
+      return 0;
+    }
+  }
+
   static bool killWeChatProcesses() {
     try {
       final pids = findProcessIds('Weixin.exe');

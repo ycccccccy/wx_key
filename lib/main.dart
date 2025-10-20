@@ -1,17 +1,21 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:file_picker/file_picker.dart';
 import 'package:window_manager/window_manager.dart';
 import 'dart:io';
 import 'dart:async';
 import 'services/dll_injector.dart';
 import 'services/key_storage.dart';
-import 'services/pipe_listener.dart';
+import 'services/log_reader.dart';
+import 'services/app_logger.dart';
+import 'widgets/settings_dialog.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await windowManager.ensureInitialized();
+  
+  // 初始化应用日志
+  await AppLogger.init();
   
   // 设置窗口选项，防止默认关闭行为
   WindowOptions windowOptions = const WindowOptions(
@@ -228,6 +232,9 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
   
   // 控制状态轮询
   bool _isPolling = false;
+  
+  // 日志流订阅
+  StreamSubscription<Map<String, dynamic>>? _logStreamSubscription;
 
   @override
   void initState() {
@@ -254,6 +261,8 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
     await windowManager.hide();
     // 窗口关闭时清理所有资源
     await _cleanupResources();
+    // 关闭日志服务
+    await AppLogger.close();
     // 等待一段时间确保所有资源都被释放
     await Future.delayed(const Duration(milliseconds: 500));
     // 销毁窗口并退出进程
@@ -269,16 +278,12 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
     _isPolling = false;
     print('[清理] 状态轮询已停止');
     
-    // 取消定时器
-    _backupMonitorTimer?.cancel();
-    _backupMonitorTimer = null;
-    print('[清理] 定时器已取消');
+    // 取消日志流订阅
+    await _logStreamSubscription?.cancel();
+    _logStreamSubscription = null;
+    print('[清理] 日志流订阅已取消');
     
-    // 停止管道监听和清理 isolate
-    await PipeListener.stopListening();
-    print('[清理] 管道监听已停止');
-    
-    // 等待一小段时间确保 isolate 完全退出
+    // 等待一小段时间确保完全退出
     await Future.delayed(const Duration(milliseconds: 300));
     print('[清理] 资源清理完成');
   }
@@ -293,8 +298,10 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
           _savedKey = keyInfo['key'] as String;
           _keyTimestamp = keyInfo['timestamp'] as DateTime?;
         });
+        await AppLogger.info('成功加载已保存的密钥信息');
       }
-    } catch (e) {
+    } catch (e, stackTrace) {
+      await AppLogger.error('加载保存的数据失败', e, stackTrace);
     }
   }
 
@@ -307,44 +314,47 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
           _wechatVersion = version;
           _statusMessage = '检测到微信版本: $version';
         });
+        await AppLogger.success('检测到微信版本: $version');
       } else {
         setState(() {
           _statusMessage = '未找到微信安装目录';
         });
+        await AppLogger.warning('未找到微信安装目录');
         _showAnimatedToast('未找到微信安装目录', Colors.orange, Icons.warning);
-        // 延迟弹出手动选择对话框
+        // 延迟打开设置页面让用户手动选择
         Future.delayed(const Duration(milliseconds: 500), () {
           if (mounted) {
-            _showManualSelectDialog();
+            _openSettings();
           }
         });
       }
-    } catch (e) {
+    } catch (e, stackTrace) {
+      await AppLogger.error('检测微信版本失败', e, stackTrace);
     }
   }
 
-  /// 启动命名管道监听
-  Future<void> _startPipeListener() async {
+  /// 启动日志文件监控
+  Future<void> _startLogMonitoring() async {
     try {
-      final success = await PipeListener.startListening();
-
-      if (success) {
-        // 监听密钥流
-        PipeListener.keyStream.listen((key) {
-          _onKeyReceived(key);
-        });
-        
-        // 监听日志流
-        PipeListener.logStream.listen((log) {
-          _addLogMessage(log['type']!, log['message']!);
-        });
-        
-      } else {
-      }
+      // 清空日志文件
+      await LogReader.clearLog();
+      await AppLogger.info('已清空DLL日志文件，开始监控');
       
-      // 启动备份文件监控（以防管道通信失败）
-      _startBackupFileMonitoring();
-    } catch (e) {
+      // 创建日志轮询流并监听
+      _logStreamSubscription = LogReader.createPollingStream().listen((event) {
+        if (event['type'] == 'key') {
+          // 收到密钥
+          _onKeyReceived(event['data'] as String);
+        } else if (event['type'] == 'log') {
+          // 收到日志消息
+          final logData = event['data'] as Map<String, String>;
+          _addLogMessage(logData['type']!, logData['message']!);
+        }
+      });
+      
+    } catch (e, stackTrace) {
+      await AppLogger.error('启动日志监控失败', e, stackTrace);
+      print('[日志监控] 启动失败: $e');
     }
   }
   
@@ -372,38 +382,11 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
     }
   }
 
-  /// 监控备份文件
-  Timer? _backupMonitorTimer;
-  
-  void _startBackupFileMonitoring() {
-    _backupMonitorTimer?.cancel(); // 取消之前的定时器
-    _backupMonitorTimer = Timer.periodic(const Duration(seconds: 1), (timer) async {
-      try {
-        // 如果已经获取到密钥或没有注入，停止监控
-        if (_extractedKey != null || !_isDllInjected) {
-          timer.cancel();
-          return;
-        }
-        
-        final backupFile = File(r'C:\temp\wechat_key_backup.txt');
-        if (await backupFile.exists()) {
-          final content = await backupFile.readAsString();
-          if (content.trim().isNotEmpty && _extractedKey == null) {
-            _onKeyReceived(content.trim());
-            // 删除备份文件，避免重复读取
-            await backupFile.delete();
-            timer.cancel(); // 停止监控
-          }
-        }
-      } catch (e) {
-        // 忽略文件监控错误
-      }
-    });
-  }
 
   /// 处理接收到的密钥
   Future<void> _onKeyReceived(String key) async {
     try {
+      await AppLogger.success('成功接收到密钥: ${key.substring(0, 8)}...');
       
       setState(() {
         _extractedKey = key;
@@ -417,22 +400,22 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
           _keyTimestamp = DateTime.now();
           _statusMessage = '密钥获取成功！';
         });
+        await AppLogger.success('密钥已自动保存');
         _showAnimatedToast('密钥已自动保存', Colors.green, Icons.check_circle);
         
-        // 密钥获取成功后，停止管道监听以释放资源
-        _stopPipeListenerDelayed();
+        // 密钥获取成功后，延迟停止日志监控以释放资源
+        Future.delayed(const Duration(seconds: 3), () async {
+          if (mounted) {
+            await _cleanupResources();
+          }
+        });
       } else {
+        await AppLogger.error('密钥保存失败');
         _showAnimatedToast('密钥保存失败', Colors.red, Icons.error);
       }
-    } catch (e) {
+    } catch (e, stackTrace) {
+      await AppLogger.error('处理接收到的密钥时出错', e, stackTrace);
     }
-  }
-
-  /// 延迟停止管道监听
-  Future<void> _stopPipeListenerDelayed() async {
-    // 等待3秒，确保所有消息都已接收
-    await Future.delayed(const Duration(seconds: 3));
-    await _cleanupResources();
   }
 
   /// 启动密钥获取超时计时器
@@ -452,6 +435,7 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
   Future<void> _autoInjectDll() async {
     if (_wechatVersion == null) {
       _addLogMessage('ERROR', '未检测到微信版本');
+      await AppLogger.error('未检测到微信版本，无法开始注入');
       return;
     }
 
@@ -461,14 +445,15 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
       _isStoppingListener = false;
     });
 
-    // 启动管道监听
-    await _startPipeListener();
+    // 启动日志监控
+    await _startLogMonitoring();
 
     setState(() {
       _isLoading = true;
       _statusMessage = '准备开始自动注入...';
     });
     _addLogMessage('INFO', '准备开始自动注入...');
+    await AppLogger.info('用户开始自动注入流程，微信版本: $_wechatVersion');
 
     try {
       // 1. 下载DLL
@@ -476,15 +461,17 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
       setState(() {
         _statusMessage = '正在从GitHub下载DLL文件';
       });
+      await AppLogger.info('开始下载DLL文件，版本: $_wechatVersion');
 
       final dllPath = await DllInjector.downloadDll(_wechatVersion!);
       if (dllPath == null) {
         _addLogMessage('ERROR', '版本未适配');
+        await AppLogger.error('版本未适配: $_wechatVersion，GitHub上没有对应的DLL文件');
         setState(() {
           _isLoading = false;
           _statusMessage = '版本未适配';
         });
-        // 停止管道监听并清理资源
+        // 停止日志监控并清理资源
         await _cleanupResources();
         // 显示版本未适配弹窗
         _showVersionNotSupportedDialog();
@@ -492,6 +479,7 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
       }
 
       _addLogMessage('SUCCESS', 'DLL下载成功');
+      await AppLogger.success('DLL文件下载成功: $dllPath');
 
       // 2. 检查微信是否运行，如果运行则请求用户确认关闭
       if (_isWechatRunning) {
@@ -511,7 +499,7 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
           setState(() {
             _statusMessage = '用户取消操作';
           });
-          // 用户取消，停止管道监听并清理资源
+          // 用户取消，停止日志监控并清理资源
           await _cleanupResources();
           return;
         }
@@ -583,6 +571,7 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
       
       if (success) {
         _addLogMessage('SUCCESS', 'DLL注入成功！等待密钥获取...');
+        await AppLogger.success('DLL注入成功，开始等待密钥获取');
         setState(() {
           _isDllInjected = true;
           _statusMessage = 'DLL注入成功！等待密钥获取...';
@@ -592,18 +581,20 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
         _startKeyTimeout();
       } else {
         _addLogMessage('ERROR', 'DLL注入失败，请确保以管理员身份运行');
+        await AppLogger.error('DLL注入失败，可能未以管理员身份运行');
         setState(() {
           _statusMessage = 'DLL注入失败';
         });
-        // 停止管道监听并清理资源
+        // 停止日志监控并清理资源
         await _cleanupResources();
       }
-    } catch (e) {
+    } catch (e, stackTrace) {
       _addLogMessage('ERROR', '自动注入过程出错: $e');
+      await AppLogger.error('自动注入过程出错', e, stackTrace);
       setState(() {
         _statusMessage = '自动注入失败: $e';
       });
-      // 出错时停止管道监听并清理资源
+      // 出错时停止日志监控并清理资源
       await _cleanupResources();
     } finally {
       setState(() {
@@ -643,12 +634,12 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
       setState(() {
         _isWechatRunning = isRunning;
         
-        // 微信不运行时，重置注入状态并延迟停止监听
+        // 微信不运行时，重置注入状态并延迟停止监控
         if (!isRunning && _isDllInjected && !_isStoppingListener) {
           _isDllInjected = false;
           _isStoppingListener = true;
           
-          // 微信崩溃时DLL会发送密钥，延迟3秒停止监听以确保接收到密钥
+          // 微信崩溃时DLL会写入密钥到日志，延迟3秒停止监控以确保读取到密钥
           Future.delayed(const Duration(seconds: 3), () async {
             if (mounted) {
               await _cleanupResources();
@@ -905,159 +896,19 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
     }
   }
 
-  /// 显示手动选择微信目录对话框
-  Future<void> _showManualSelectDialog() async {
-    await showDialog(
+
+  /// 打开设置对话框
+  Future<void> _openSettings() async {
+    await AppLogger.info('用户打开设置页面');
+    showDialog(
       context: context,
-      barrierDismissible: false,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-          ),
-          title: Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: Colors.orange.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: const Icon(
-                  Icons.folder_open,
-                  color: Colors.orange,
-                  size: 24,
-                ),
-              ),
-              const SizedBox(width: 12),
-              const Expanded(
-                child: Text(
-                  '选择微信安装目录',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w600,
-                    fontFamily: 'HarmonyOS_SansSC',
-                  ),
-                ),
-              ),
-            ],
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                '未能自动检测到微信安装目录，请手动选择微信的安装文件夹。',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontFamily: 'HarmonyOS_SansSC',
-                  height: 1.5,
-                ),
-              ),
-              const SizedBox(height: 12),
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.grey.shade100,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: const Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      '示例路径：',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        fontFamily: 'HarmonyOS_SansSC',
-                      ),
-                    ),
-                    SizedBox(height: 4),
-                    Text(
-                      'D:\\Program Files\\Tencent\\Weixin',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontFamily: 'Courier New',
-                        color: Colors.black87,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: Text(
-                '取消',
-                style: TextStyle(
-                  color: Colors.grey.shade600,
-                  fontWeight: FontWeight.w500,
-                  fontFamily: 'HarmonyOS_SansSC',
-                ),
-              ),
-            ),
-            ElevatedButton.icon(
-              onPressed: () {
-                Navigator.of(context).pop();
-                _selectWeChatDirectory();
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF07c160),
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                elevation: 0,
-              ),
-              icon: const Icon(Icons.folder_open, size: 18),
-              label: const Text(
-                '选择目录',
-                style: TextStyle(
-                  fontWeight: FontWeight.w600,
-                  fontFamily: 'HarmonyOS_SansSC',
-                ),
-              ),
-            ),
-          ],
-        );
-      },
+      builder: (context) => SettingsDialog(
+        onWechatDirectoryChanged: () async {
+          // 重新检测版本
+          await _detectWeChatVersion();
+        },
+      ),
     );
-  }
-
-  /// 手动选择微信目录
-  Future<void> _selectWeChatDirectory() async {
-    try {
-      final result = await FilePicker.platform.getDirectoryPath(
-        dialogTitle: '选择微信安装目录',
-      );
-
-      if (result == null) {
-        return;
-      }
-
-      // 验证目录中是否有 Weixin.exe 或 WeChat.exe
-      final weixinPath = '${result}\\Weixin.exe';
-      final wechatPath = '${result}\\WeChat.exe';
-      
-      if (!File(weixinPath).existsSync() && !File(wechatPath).existsSync()) {
-        _showAnimatedToast('所选目录中未找到微信程序', Colors.red, Icons.error);
-        return;
-      }
-
-      // 保存目录
-      final saved = await KeyStorage.saveWechatDirectory(result);
-      if (saved) {
-        _showAnimatedToast('微信目录已保存', Colors.green, Icons.check_circle);
-        // 重新检测版本
-        await _detectWeChatVersion();
-      } else {
-        _showAnimatedToast('保存目录失败', Colors.red, Icons.error);
-      }
-    } catch (e) {
-      _showAnimatedToast('选择目录失败: $e', Colors.red, Icons.error);
-    }
   }
 
   Widget _buildSimpleActionButton() {
@@ -1320,8 +1171,8 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
                   ),
                   // 设置按钮
                   IconButton(
-                    onPressed: _selectWeChatDirectory,
-                    tooltip: '手动选择微信目录',
+                    onPressed: _openSettings,
+                    tooltip: '设置',
                     icon: Icon(
                       Icons.settings_outlined,
                       color: Colors.grey.shade600,
