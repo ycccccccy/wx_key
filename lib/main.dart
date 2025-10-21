@@ -523,10 +523,22 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
 
       final launched = await DllInjector.launchWeChat();
       if (!launched) {
-        _addLogMessage('ERROR', '微信启动失败');
+        _addLogMessage('ERROR', '微信启动失败，请检查微信安装路径');
+        await AppLogger.error('微信启动失败，可能原因：路径错误或微信未安装');
         setState(() {
           _isLoading = false;
           _statusMessage = '微信启动失败';
+        });
+        // 停止日志监控并清理资源
+        await _cleanupResources();
+        // 提示用户检查设置
+        _showAnimatedToast('微信启动失败，请在设置中检查微信路径', Colors.red, Icons.error);
+        
+        // 延迟后自动打开设置对话框
+        Future.delayed(const Duration(milliseconds: 1500), () {
+          if (mounted) {
+            _openSettings();
+          }
         });
         return;
       }
@@ -541,11 +553,15 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
 
       final windowAppeared = await DllInjector.waitForWeChatWindow(maxWaitSeconds: 15);
       if (!windowAppeared) {
-        _addLogMessage('WARNING', '等待微信窗口超时');
+        _addLogMessage('ERROR', '等待微信窗口超时，微信可能启动失败');
+        await AppLogger.error('等待微信窗口超时');
         setState(() {
           _isLoading = false;
           _statusMessage = '等待微信窗口超时';
         });
+        // 停止日志监控并清理资源
+        await _cleanupResources();
+        _showAnimatedToast('微信窗口未出现，请手动启动微信后重试', Colors.orange, Icons.warning);
         return;
       }
 
@@ -554,7 +570,7 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
       setState(() {
         _statusMessage = '等待微信完全启动...请不要点击微信任何按键';
       });
-      for (int i = 3; i > 0; i--) {
+      for (int i = 5; i > 0; i--) {
         setState(() {
           _statusMessage = '等待微信完全启动... ($i秒)，请不要点击微信任何按键';
         });

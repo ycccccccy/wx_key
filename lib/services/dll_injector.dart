@@ -596,42 +596,81 @@ class DllInjector {
 
   static Future<bool> launchWeChat() async {
     try {
+      String? wechatPath;
       
-      // 首先尝试从注册表获取路径
-      String? wechatPath = _getWeChatPathFromRegistry();
+      // 优先使用用户设置的微信目录
+      final wechatDir = await getWeChatDirectory();
+      if (wechatDir != null) {
+        final weixinPath = path.join(wechatDir, 'Weixin.exe');
+        final wechatExePath = path.join(wechatDir, 'WeChat.exe');
+        
+        if (await File(weixinPath).exists()) {
+          wechatPath = weixinPath;
+        } else if (await File(wechatExePath).exists()) {
+          wechatPath = wechatExePath;
+        }
+      }
       
-      // 如果注册表没找到，尝试常见的默认路径
+      // 如果用户设置的目录无效，尝试从注册表获取路径
+      if (wechatPath == null) {
+        wechatPath = _getWeChatPathFromRegistry();
+      }
+      
+      // 如果注册表也没找到，尝试常见的默认路径
       if (wechatPath == null || !await File(wechatPath).exists()) {
-        final fallbackPaths = [
-          r'C:\Program Files\Tencent\WeChat\WeChat.exe',
-          r'C:\Program Files (x86)\Tencent\WeChat\WeChat.exe',
-          r'C:\Program Files\Tencent\Weixin\Weixin.exe',
-          r'C:\Program Files (x86)\Tencent\Weixin\Weixin.exe',
+        final drives = ['C', 'D', 'E', 'F'];
+        final pathPatterns = [
+          r'\Program Files\Tencent\WeChat\WeChat.exe',
+          r'\Program Files (x86)\Tencent\WeChat\WeChat.exe',
+          r'\Program Files\Tencent\Weixin\Weixin.exe',
+          r'\Program Files (x86)\Tencent\Weixin\Weixin.exe',
         ];
         
-        for (final fallbackPath in fallbackPaths) {
-          if (await File(fallbackPath).exists()) {
-            wechatPath = fallbackPath;
+        for (final drive in drives) {
+          for (final pattern in pathPatterns) {
+            final fullPath = '$drive:$pattern';
+            if (await File(fullPath).exists()) {
+              wechatPath = fullPath;
+              break;
+            }
+          }
+          if (wechatPath != null && await File(wechatPath).exists()) {
             break;
           }
         }
       }
       
       if (wechatPath == null || !await File(wechatPath).exists()) {
+        print('[启动微信] 未找到微信可执行文件');
         return false;
       }
       
-      await Process.start(wechatPath, []);
+      print('[启动微信] 找到微信路径: $wechatPath');
       
+      // 启动微信进程
+      final process = await Process.start(
+        wechatPath, 
+        [],
+        mode: ProcessStartMode.detached,
+      );
+      
+      print('[启动微信] 微信进程已启动，PID: ${process.pid}');
+      
+      // 等待进程启动
       await Future.delayed(const Duration(seconds: 2));
       
+      // 检查微信进程是否在运行
       final isRunning = isProcessRunning('Weixin.exe');
       if (isRunning) {
+        print('[启动微信] 微信进程运行确认成功');
         return true;
       } else {
+        print('[启动微信] 未检测到微信进程');
         return false;
       }
-    } catch (e) {
+    } catch (e, stackTrace) {
+      print('[启动微信] 启动失败: $e');
+      print('[启动微信] 堆栈跟踪: $stackTrace');
       return false;
     }
   }
@@ -651,17 +690,19 @@ class DllInjector {
   }
 
   static int? findMainWeChatPid() {
-    final pids = <int>[];
-    
     final enumWindowsProc = Pointer.fromFunction<EnumWindowsProc>(_enumWindowsProc, 0);
     final pidsPtr = calloc<Pointer<Int32>>();
-    pidsPtr.value = calloc<Int32>(100); 
+    pidsPtr.value = calloc<Int32>(100);
+    
+    // 初始化数组为0
+    for (int i = 0; i < 100; i++) {
+      pidsPtr.value[i] = 0;
+    }
     
     try {
-      if (EnumWindows(enumWindowsProc, pidsPtr.address) == 0) {
-        return null;
-      }
+      EnumWindows(enumWindowsProc, pidsPtr.address);
       
+      final pids = <int>[];
       for (int i = 0; i < 100; i++) {
         final pid = pidsPtr.value[i];
         if (pid == 0) break;
