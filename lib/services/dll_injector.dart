@@ -530,6 +530,63 @@ class DllInjector {
     }
   }
 
+  /// 获取GitHub上最新的适配版本
+  /// 返回最新版本号，如果获取失败返回null
+  static Future<String?> getLatestSupportedVersion() async {
+    try {
+      final url = 'https://api.github.com/repos/ycccccccy/wx_key/releases/tags/dlls';
+      final response = await http.get(
+        Uri.parse(url),
+        headers: {'User-Agent': 'wx_key_tool'},
+      ).timeout(const Duration(seconds: 10));
+      
+      if (response.statusCode == 200) {
+        // 解析JSON响应，提取所有DLL文件名
+        final data = response.body;
+        // 匹配所有 wx_key-4.x.x.x.dll 格式的文件名
+        final versionRegex = RegExp(r'wx_key-(4\.\d+\.\d+\.\d+)\.dll');
+        final matches = versionRegex.allMatches(data);
+        
+        if (matches.isEmpty) return null;
+        
+        // 提取所有版本号并排序
+        final versions = matches.map((m) => m.group(1)!).toList();
+        versions.sort((a, b) => _compareVersions(b, a)); // 降序排序
+        
+        return versions.first;
+      }
+      return null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /// 比较两个版本号
+  /// 返回: a > b 返回正数, a == b 返回0, a < b 返回负数
+  static int _compareVersions(String a, String b) {
+    final aParts = a.split('.').map(int.parse).toList();
+    final bParts = b.split('.').map(int.parse).toList();
+    
+    for (int i = 0; i < 4; i++) {
+      if (aParts[i] != bParts[i]) {
+        return aParts[i] - bParts[i];
+      }
+    }
+    return 0;
+  }
+
+  /// 比较当前版本和最新支持版本
+  /// 返回: 1表示当前版本更新, 0表示相同, -1表示当前版本更旧, null表示无法比较
+  static Future<int?> compareWithLatestVersion(String currentVersion) async {
+    final latestVersion = await getLatestSupportedVersion();
+    if (latestVersion == null) return null;
+    
+    final result = _compareVersions(currentVersion, latestVersion);
+    if (result > 0) return 1;
+    if (result < 0) return -1;
+    return 0;
+  }
+
   static Future<DllDownloadResult> downloadDll(String version) async {
     try {
       final tempDir = Directory.systemTemp;

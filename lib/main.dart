@@ -488,8 +488,9 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
           });
           // 停止日志监控并清理资源
           await _cleanupResources();
-          // 显示版本未适配弹窗
-          _showVersionNotSupportedDialog();
+          // 比较版本，显示不同的提示
+          final versionComparison = await DllInjector.compareWithLatestVersion(_wechatVersion!);
+          _showVersionNotSupportedDialog(versionComparison);
           return;
         } else {
           // 文件系统错误或其他错误
@@ -975,7 +976,38 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
   }
 
   /// 显示版本未适配弹窗
-  Future<void> _showVersionNotSupportedDialog() async {
+  /// versionComparison: 1表示当前版本更新, -1表示当前版本更旧, null表示无法比较
+  Future<void> _showVersionNotSupportedDialog(int? versionComparison) async {
+    // 根据版本比较结果确定提示内容
+    String tipMessage;
+    IconData tipIcon;
+    Color tipColor;
+    Color tipIconColor;
+    Color tipTextColor;
+    
+    if (versionComparison == 1) {
+      // 当前版本比最新适配版本更新
+      tipMessage = '当前版本较新以至于作者还没有更新\n请等待作者更新或提交 Issue 提醒作者';
+      tipIcon = Icons.info_outline;
+      tipColor = Colors.blue;
+      tipIconColor = Colors.blue.shade700;
+      tipTextColor = Colors.blue.shade900;
+    } else if (versionComparison == -1) {
+      // 当前版本比最新适配版本更旧
+      tipMessage = '当前的旧版本不再会适配\n建议更新微信到最新版本';
+      tipIcon = Icons.lightbulb_outline;
+      tipColor = Colors.orange;
+      tipIconColor = Colors.orange.shade700;
+      tipTextColor = Colors.orange.shade900;
+    } else {
+      // 无法比较（网络问题等）
+      tipMessage = '建议更新微信到最新版本\n或前往 GitHub 提交 Issue';
+      tipIcon = Icons.lightbulb_outline;
+      tipColor = Colors.orange;
+      tipIconColor = Colors.orange.shade700;
+      tipTextColor = Colors.orange.shade900;
+    }
+    
     await showDialog(
       context: context,
       barrierDismissible: false,
@@ -1023,13 +1055,39 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
                   height: 1.5,
                 ),
               ),
-              const SizedBox(height: 8),
-              const Text(
-                '您可以前往 GitHub 提交 Issue 请求适配此版本。',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontFamily: 'HarmonyOS_SansSC',
-                  height: 1.5,
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: tipColor.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: tipColor.withOpacity(0.3),
+                    width: 1,
+                  ),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(
+                      tipIcon,
+                      color: tipIconColor,
+                      size: 20,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        tipMessage,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontFamily: 'HarmonyOS_SansSC',
+                          height: 1.4,
+                          color: tipTextColor,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ],
