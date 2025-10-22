@@ -1,10 +1,31 @@
 import 'dart:ffi';
 import 'dart:io';
+import 'dart:async';
 import 'package:ffi/ffi.dart';
 import 'package:win32/win32.dart';
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as path;
 import 'key_storage.dart';
+
+class DllDownloadResult {
+  final bool success;
+  final String? dllPath;
+  final DllDownloadError? error;
+  
+  DllDownloadResult.success(this.dllPath) 
+      : success = true,
+        error = null;
+  
+  DllDownloadResult.failure(this.error) 
+      : success = false,
+        dllPath = null;
+}
+
+enum DllDownloadError {
+  networkError,
+  versionNotFound,
+  fileError,
+}
 
 class DllInjector {
   static List<int> findProcessIds(String processName) {
@@ -509,7 +530,7 @@ class DllInjector {
     }
   }
 
-  static Future<String?> downloadDll(String version) async {
+  static Future<DllDownloadResult> downloadDll(String version) async {
     try {
       final tempDir = Directory.systemTemp;
       final dllPath = path.join(tempDir.path, 'wx_key-$version.dll');
@@ -520,7 +541,7 @@ class DllInjector {
         final fileSize = await dllFile.length();
         // 检查文件大小是否合理（至少1KB，避免损坏的文件）
         if (fileSize > 1024) {
-          return dllPath;
+          return DllDownloadResult.success(dllPath);
         }
         // 文件损坏，删除后重新下载
         await dllFile.delete();
@@ -529,16 +550,38 @@ class DllInjector {
       // 本地没有或文件损坏，从GitHub下载
       final url = 'https://github.com/ycccccccy/wx_key/releases/download/dlls/wx_key-$version.dll';
       
-      final response = await http.get(Uri.parse(url));
-      
-      if (response.statusCode == 200) {
-        await dllFile.writeAsBytes(response.bodyBytes);
-        return dllPath;
-      } else {
-        return null;
+      try {
+        final response = await http.get(
+          Uri.parse(url),
+          headers: {'User-Agent': 'wx_key_tool'},
+        ).timeout(const Duration(seconds: 10));
+        
+        if (response.statusCode == 200) {
+          await dllFile.writeAsBytes(response.bodyBytes);
+          return DllDownloadResult.success(dllPath);
+        } else if (response.statusCode == 404) {
+          // 404 表示该版本不存在
+          return DllDownloadResult.failure(DllDownloadError.versionNotFound);
+        } else {
+          // 其他HTTP错误视为网络问题
+          return DllDownloadResult.failure(DllDownloadError.networkError);
+        }
+      } on http.ClientException catch (_) {
+        // HTTP客户端异常，网络连接问题
+        return DllDownloadResult.failure(DllDownloadError.networkError);
+      } on SocketException catch (_) {
+        // Socket异常，网络不可达
+        return DllDownloadResult.failure(DllDownloadError.networkError);
+      } on TimeoutException catch (_) {
+        // 超时，网络问题
+        return DllDownloadResult.failure(DllDownloadError.networkError);
       }
+    } on FileSystemException catch (_) {
+      // 文件系统错误
+      return DllDownloadResult.failure(DllDownloadError.fileError);
     } catch (e) {
-      return null;
+      // 其他未知错误，默认视为网络问题
+      return DllDownloadResult.failure(DllDownloadError.networkError);
     }
   }
 

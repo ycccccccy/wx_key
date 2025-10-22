@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:window_manager/window_manager.dart';
+import 'package:file_picker/file_picker.dart';
 import 'dart:io';
 import 'dart:async';
 import 'services/dll_injector.dart';
@@ -463,21 +464,48 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
       });
       await AppLogger.info('开始下载DLL文件，版本: $_wechatVersion');
 
-      final dllPath = await DllInjector.downloadDll(_wechatVersion!);
-      if (dllPath == null) {
-        _addLogMessage('ERROR', '版本未适配');
-        await AppLogger.error('版本未适配: $_wechatVersion，GitHub上没有对应的DLL文件');
-        setState(() {
-          _isLoading = false;
-          _statusMessage = '版本未适配';
-        });
-        // 停止日志监控并清理资源
-        await _cleanupResources();
-        // 显示版本未适配弹窗
-        _showVersionNotSupportedDialog();
-        return;
+      final downloadResult = await DllInjector.downloadDll(_wechatVersion!);
+      if (!downloadResult.success) {
+        // 下载失败，根据错误类型处理
+        if (downloadResult.error == DllDownloadError.networkError) {
+          _addLogMessage('ERROR', '网络连接失败，无法下载DLL文件');
+          await AppLogger.error('网络连接失败: $_wechatVersion');
+          setState(() {
+            _isLoading = false;
+            _statusMessage = '网络连接失败';
+          });
+          // 停止日志监控并清理资源
+          await _cleanupResources();
+          // 显示网络错误弹窗，提供手动选择DLL选项
+          _showNetworkErrorDialog();
+          return;
+        } else if (downloadResult.error == DllDownloadError.versionNotFound) {
+          _addLogMessage('ERROR', '版本未适配');
+          await AppLogger.error('版本未适配: $_wechatVersion，GitHub上没有对应的DLL文件');
+          setState(() {
+            _isLoading = false;
+            _statusMessage = '版本未适配';
+          });
+          // 停止日志监控并清理资源
+          await _cleanupResources();
+          // 显示版本未适配弹窗
+          _showVersionNotSupportedDialog();
+          return;
+        } else {
+          // 文件系统错误或其他错误
+          _addLogMessage('ERROR', 'DLL文件处理失败');
+          await AppLogger.error('DLL文件处理失败: $_wechatVersion');
+          setState(() {
+            _isLoading = false;
+            _statusMessage = 'DLL文件处理失败';
+          });
+          await _cleanupResources();
+          _showAnimatedToast('DLL文件处理失败，请重试', Colors.red, Icons.error);
+          return;
+        }
       }
 
+      final dllPath = downloadResult.dllPath!;
       _addLogMessage('SUCCESS', 'DLL下载成功');
       await AppLogger.success('DLL文件下载成功: $dllPath');
 
@@ -793,6 +821,159 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
     return result ?? false;
   }
 
+  /// 显示网络错误弹窗
+  Future<void> _showNetworkErrorDialog() async {
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          title: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.orange.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(
+                  Icons.cloud_off_rounded,
+                  color: Colors.orange,
+                  size: 24,
+                ),
+              ),
+              const SizedBox(width: 12),
+              const Expanded(
+                child: Text(
+                  '网络连接失败',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w600,
+                    fontFamily: 'HarmonyOS_SansSC',
+                  ),
+                ),
+              ),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '无法从 GitHub 下载微信版本 $_wechatVersion 的 DLL 文件。',
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontFamily: 'HarmonyOS_SansSC',
+                  height: 1.5,
+                ),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                '可能原因：\n• 网络连接不稳定\n• 无法访问 GitHub\n• 代理或防火墙设置',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontFamily: 'HarmonyOS_SansSC',
+                  height: 1.5,
+                ),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                '你可以自行前往github下载对应版本的 DLL 文件继续。',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontFamily: 'HarmonyOS_SansSC',
+                  height: 1.5,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text(
+                '取消',
+                style: TextStyle(
+                  color: Colors.grey.shade600,
+                  fontWeight: FontWeight.w500,
+                  fontFamily: 'HarmonyOS_SansSC',
+                ),
+              ),
+            ),
+            OutlinedButton.icon(
+              onPressed: () async {
+                Navigator.of(context).pop();
+                _openDllDownloadPage();
+              },
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Colors.blue,
+                side: const BorderSide(color: Colors.blue),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+              icon: const Icon(Icons.download, size: 18),
+              label: const Text(
+                '前往下载',
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  fontFamily: 'HarmonyOS_SansSC',
+                ),
+              ),
+            ),
+            OutlinedButton.icon(
+              onPressed: () async {
+                Navigator.of(context).pop();
+                // 重试下载
+                await _autoInjectDll();
+              },
+              style: OutlinedButton.styleFrom(
+                foregroundColor: const Color(0xFF07c160),
+                side: const BorderSide(color: Color(0xFF07c160)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+              icon: const Icon(Icons.refresh, size: 18),
+              label: const Text(
+                '重试',
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  fontFamily: 'HarmonyOS_SansSC',
+                ),
+              ),
+            ),
+            ElevatedButton.icon(
+              onPressed: () {
+                Navigator.of(context).pop();
+                _continueWithManualDll();
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF07c160),
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                elevation: 0,
+              ),
+              icon: const Icon(Icons.folder_open, size: 18),
+              label: const Text(
+                '选择本地 DLL',
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  fontFamily: 'HarmonyOS_SansSC',
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   /// 显示版本未适配弹窗
   Future<void> _showVersionNotSupportedDialog() async {
     await showDialog(
@@ -909,6 +1090,186 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
       }
     } catch (e) {
       _showAnimatedToast('打开浏览器失败', Colors.red, Icons.error);
+    }
+  }
+
+  /// 打开DLL下载页面
+  Future<void> _openDllDownloadPage() async {
+    try {
+      final downloadUrl = Uri.parse('https://github.com/ycccccccy/wx_key/releases/tag/dlls');
+      
+      if (await canLaunchUrl(downloadUrl)) {
+        await launchUrl(downloadUrl, mode: LaunchMode.externalApplication);
+        _showAnimatedToast('已在浏览器中打开 DLL 下载页面', Colors.green, Icons.open_in_new);
+      } else {
+        _showAnimatedToast('无法打开浏览器', Colors.red, Icons.error);
+      }
+    } catch (e) {
+      _showAnimatedToast('打开浏览器失败', Colors.red, Icons.error);
+    }
+  }
+
+  /// 手动选择DLL文件
+  Future<String?> _pickDllFile() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['dll'],
+        dialogTitle: '选择DLL文件',
+      );
+      
+      if (result != null && result.files.single.path != null) {
+        return result.files.single.path!;
+      }
+      return null;
+    } catch (e) {
+      await AppLogger.error('选择DLL文件失败', e);
+      _showAnimatedToast('选择文件失败', Colors.red, Icons.error);
+      return null;
+    }
+  }
+
+  /// 使用手动选择的DLL继续注入流程
+  Future<void> _continueWithManualDll() async {
+    final dllPath = await _pickDllFile();
+    if (dllPath == null) {
+      await AppLogger.info('用户取消选择DLL文件');
+      return;
+    }
+    
+    await AppLogger.info('用户手动选择了DLL文件: $dllPath');
+    _showAnimatedToast('已选择DLL文件', Colors.green, Icons.check_circle);
+    
+    // 启动日志监控
+    await _startLogMonitoring();
+    
+    setState(() {
+      _isLoading = true;
+      _statusMessage = '准备使用手动选择的DLL...';
+    });
+    
+    try {
+      // 检查微信是否运行，如果运行则请求用户确认关闭
+      if (_isWechatRunning) {
+        setState(() {
+          _isLoading = false;
+        });
+        
+        final shouldClose = await _showConfirmDialog(
+          title: '确认关闭微信',
+          content: '检测到微信正在运行，需要重启微信才能注入DLL。\n是否关闭当前微信？',
+          confirmText: '关闭并继续',
+          cancelText: '取消',
+        );
+        
+        if (!shouldClose) {
+          _addLogMessage('WARNING', '用户取消操作');
+          setState(() {
+            _statusMessage = '用户取消操作';
+          });
+          await _cleanupResources();
+          return;
+        }
+        
+        setState(() {
+          _isLoading = true;
+          _statusMessage = '正在关闭现有微信进程...';
+        });
+        _addLogMessage('INFO', '正在关闭现有微信进程...');
+        
+        DllInjector.killWeChatProcesses();
+        await Future.delayed(const Duration(seconds: 2));
+        _addLogMessage('SUCCESS', '已关闭现有微信进程');
+      }
+
+      // 启动微信
+      _addLogMessage('INFO', '正在启动微信...');
+      setState(() {
+        _statusMessage = '正在启动微信...';
+      });
+
+      final launched = await DllInjector.launchWeChat();
+      if (!launched) {
+        _addLogMessage('ERROR', '微信启动失败，请检查微信安装路径');
+        await AppLogger.error('微信启动失败');
+        setState(() {
+          _isLoading = false;
+          _statusMessage = '微信启动失败';
+        });
+        await _cleanupResources();
+        _showAnimatedToast('微信启动失败，请在设置中检查微信路径', Colors.red, Icons.error);
+        return;
+      }
+
+      _addLogMessage('SUCCESS', '微信启动成功');
+
+      // 等待微信窗口出现
+      _addLogMessage('INFO', '等待微信窗口出现...');
+      setState(() {
+        _statusMessage = '等待微信窗口出现...';
+      });
+
+      final windowAppeared = await DllInjector.waitForWeChatWindow(maxWaitSeconds: 15);
+      if (!windowAppeared) {
+        _addLogMessage('ERROR', '等待微信窗口超时，微信可能启动失败');
+        await AppLogger.error('等待微信窗口超时');
+        setState(() {
+          _isLoading = false;
+          _statusMessage = '等待微信窗口超时';
+        });
+        await _cleanupResources();
+        _showAnimatedToast('微信窗口未出现，请手动启动微信后重试', Colors.orange, Icons.warning);
+        return;
+      }
+
+      // 延迟几秒，等待微信完全初始化
+      _addLogMessage('INFO', '等待微信完全启动，请不要点击微信任何按键');
+      setState(() {
+        _statusMessage = '等待微信完全启动...请不要点击微信任何按键';
+      });
+      for (int i = 5; i > 0; i--) {
+        setState(() {
+          _statusMessage = '等待微信完全启动... ($i秒)，请不要点击微信任何按键';
+        });
+        await Future.delayed(const Duration(seconds: 1));
+      }
+
+      // 注入DLL
+      _addLogMessage('INFO', '正在注入DLL...');
+      setState(() {
+        _statusMessage = '正在注入DLL...';
+      });
+
+      final success = DllInjector.injectDll('Weixin.exe', dllPath);
+      
+      if (success) {
+        _addLogMessage('SUCCESS', 'DLL注入成功！等待密钥获取...');
+        await AppLogger.success('DLL注入成功（手动选择），开始等待密钥获取');
+        setState(() {
+          _isDllInjected = true;
+          _statusMessage = 'DLL注入成功！等待密钥获取...';
+        });
+        
+        _startKeyTimeout();
+      } else {
+        _addLogMessage('ERROR', 'DLL注入失败，请确保以管理员身份运行');
+        await AppLogger.error('DLL注入失败（手动选择）');
+        setState(() {
+          _statusMessage = 'DLL注入失败';
+        });
+        await _cleanupResources();
+      }
+    } catch (e, stackTrace) {
+      _addLogMessage('ERROR', '注入过程出错: $e');
+      await AppLogger.error('手动DLL注入过程出错', e, stackTrace);
+      setState(() {
+        _statusMessage = '注入失败: $e';
+      });
+      await _cleanupResources();
+    } finally {
+      setState(() {
+        _isLoading = false;
+      });
     }
   }
 
