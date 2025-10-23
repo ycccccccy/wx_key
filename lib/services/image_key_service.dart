@@ -64,6 +64,7 @@ class ImageKeyService {
         return null;
       }
 
+      // 首先尝试原始方式：查找 wxid_* 或其他符合条件的目录
       await for (var entity in wechatFilesDir.list()) {
         if (entity is Directory) {
           final dirName = path.basename(entity.path);
@@ -86,6 +87,32 @@ class ImageKeyService {
             } catch (e) {
               continue;
             }
+          }
+        }
+      }
+
+      // 如果原始方式找不到，使用备选方式：查找包含 db_storage 文件夹的目录
+      await for (var entity in wechatFilesDir.list()) {
+        if (entity is Directory) {
+          final dirName = path.basename(entity.path);
+          
+          // 跳过特定的系统目录
+          if (dirName.toLowerCase().startsWith('all') || 
+              dirName.toLowerCase().startsWith('applet') ||
+              dirName.toLowerCase().startsWith('backup') ||
+              dirName.toLowerCase().startsWith('wmpf')) {
+            continue;
+          }
+          
+          // 检查该目录下是否有 db_storage 文件夹
+          try {
+            final dbStoragePath = path.join(entity.path, 'db_storage');
+            final dbStorageDir = Directory(dbStoragePath);
+            if (await dbStorageDir.exists()) {
+              return entity.path;
+            }
+          } catch (e) {
+            continue;
           }
         }
       }
