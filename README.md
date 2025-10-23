@@ -84,19 +84,6 @@ flutter build windows --release
 # build/windows/runner/Release/wx_key.exe
 ```
 
-### 开发调试
-
-```bash
-# 开发模式运行
-flutter run -d windows
-
-# 调试模式构建
-flutter build windows --debug
-
-# 性能分析
-flutter run --profile
-```
-
 ## 许可证与免责声明
 
 ### 许可证
@@ -130,6 +117,10 @@ MIT 许可证允许您自由使用、修改和分发本软件，但需要保留�
 感谢以下项目的贡献和启发：
 
 - [WxDatDecrypt](https://github.com/recarto404/WxDatDecrypt) - 提供了关键的imagekey获取思路
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=ycccccccy/wx_key&type=date&legend=top-left)](https://www.star-history.com/#ycccccccy/wx_key&type=date&legend=top-left)
 
 ---
 
