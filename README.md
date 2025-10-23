@@ -56,13 +56,18 @@
 
 ```
 wx_key/
-├── lib/                          # Flutter 应用核心代码
-│   ├── main.dart                 # 应用入口及主界面
-│   └── services/                 # 核心服务模块
-│       ├── dll_injector.dart     # DLL注入服务
-│       ├── key_storage.dart      # 密钥存储管理
-│       └── pipe_listener.dart    # 进程通信监听
-└── dllmain.cpp                   # DLL获取key的实现
+├── lib/                              # Flutter 应用核心代码
+│   ├── main.dart                     # 应用入口及主界面
+│   ├── services/                     # 核心服务模块
+│   │   ├── dll_injector.dart         # DLL 注入服务
+│   │   ├── key_storage.dart          # 密钥存储管理
+│   │   ├── image_key_service.dart    # 图片密钥获取服务
+│   │   ├── log_reader.dart           # 日志读取服务
+│   │   └── app_logger.dart           # 应用日志管理
+│   └── widgets/                      # 自定义组件
+│       └── settings_dialog.dart      # 设置对话框
+├── dllmain.cpp                       # DLL 获取密钥的实现
+└── pubspec.yaml                      # Flutter 依赖配置
 ```
 
 ## 开发构建
