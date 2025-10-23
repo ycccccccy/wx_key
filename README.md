@@ -8,7 +8,7 @@
 
 ## 项目简介
 
-本项目使用注入DLL获取微信数据库密钥的解决方案，解决了当前主流内存搜索key的工具（如 dumprs、chatlog 等）在微信 4.1 及以上版本中失效的问题
+本项目是一个在微信4.1及以上版本中获取微信数据库和解密微信缓存图片的密钥的工具
 
 ![效果截图](app.jpg)
 
@@ -48,6 +48,8 @@
 2. **开始提取**：检测完版本后将会尝试自动下载Dll，若版本不支持将无法继续
 3. **查看密钥**：如果版本支持，在下载完将自动注入获取密钥，按照提示登录微信即可查看密钥，获取完成后回到应用内即可查看，微信崩溃是正常的
 
+如果是获取图片密钥则需要保持微信登录状态并打开一张图片后再前往应用内获取图片密钥
+
 ## 项目架构
 
 ### 目录结构
@@ -80,19 +82,6 @@ flutter build windows --release
 
 # 4. 输出位置
 # build/windows/runner/Release/wx_key.exe
-```
-
-### 开发调试
-
-```bash
-# 开发模式运行
-flutter run -d windows
-
-# 调试模式构建
-flutter build windows --debug
-
-# 性能分析
-flutter run --profile
 ```
 
 ## 许可证与免责声明
@@ -128,6 +117,10 @@ MIT 许可证允许您自由使用、修改和分发本软件，但需要保留�
 感谢以下项目的贡献和启发：
 
 - [WxDatDecrypt](https://github.com/recarto404/WxDatDecrypt) - 提供了关键的imagekey获取思路
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=ycccccccy/wx_key&type=date&legend=top-left)](https://www.star-history.com/#ycccccccy/wx_key&type=date&legend=top-left)
 
 ---
 
