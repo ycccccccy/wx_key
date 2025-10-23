@@ -55,6 +55,9 @@ dependencies:
   
   # For window management
   window_manager: ^0.3.7
+  
+  # For AES encryption/decryption
+  pointycastle: ^3.9.1
 
 dev_dependencies:
   flutter_test:

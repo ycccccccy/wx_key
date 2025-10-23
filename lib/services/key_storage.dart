@@ -7,6 +7,9 @@ class KeyStorage {
   static const String _keyTimestamp = 'key_timestamp';
   static const String _keyDllPath = 'dll_path';
   static const String _keyWechatDirectory = 'wechat_directory';
+  static const String _keyImageXorKey = 'image_xor_key';
+  static const String _keyImageAesKey = 'image_aes_key';
+  static const String _keyImageKeyTimestamp = 'image_key_timestamp';
 
   /// 保存微信数据库密钥
   /// [key] 32字节密钥的十六进制字符串（64个字符）
@@ -160,6 +163,109 @@ class KeyStorage {
       return await prefs.remove(_keyWechatDirectory);
     } catch (e) {
       print('清除微信目录失败: $e');
+      return false;
+    }
+  }
+
+  /// 保存图片XOR密钥
+  static Future<bool> saveImageXorKey(int xorKey) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return await prefs.setInt(_keyImageXorKey, xorKey);
+    } catch (e) {
+      print('保存XOR密钥失败: $e');
+      return false;
+    }
+  }
+
+  /// 获取图片XOR密钥
+  static Future<int?> getImageXorKey() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return prefs.getInt(_keyImageXorKey);
+    } catch (e) {
+      print('读取XOR密钥失败: $e');
+      return null;
+    }
+  }
+
+  /// 保存图片AES密钥
+  static Future<bool> saveImageAesKey(String aesKey) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final success = await prefs.setString(_keyImageAesKey, aesKey);
+      if (success) {
+        await prefs.setString(_keyImageKeyTimestamp, DateTime.now().toIso8601String());
+      }
+      return success;
+    } catch (e) {
+      print('保存AES密钥失败: $e');
+      return false;
+    }
+  }
+
+  /// 获取图片AES密钥
+  static Future<String?> getImageAesKey() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return prefs.getString(_keyImageAesKey);
+    } catch (e) {
+      print('读取AES密钥失败: $e');
+      return null;
+    }
+  }
+
+  /// 保存图片密钥（同时保存XOR和AES）
+  static Future<bool> saveImageKeys(int xorKey, String aesKey) async {
+    try {
+      final xorSuccess = await saveImageXorKey(xorKey);
+      final aesSuccess = await saveImageAesKey(aesKey);
+      return xorSuccess && aesSuccess;
+    } catch (e) {
+      print('保存图片密钥失败: $e');
+      return false;
+    }
+  }
+
+  /// 获取图片密钥信息
+  static Future<Map<String, dynamic>?> getImageKeyInfo() async {
+    try {
+      final xorKey = await getImageXorKey();
+      final aesKey = await getImageAesKey();
+      
+      if (xorKey == null || aesKey == null) return null;
+
+      final prefs = await SharedPreferences.getInstance();
+      final timestampStr = prefs.getString(_keyImageKeyTimestamp);
+      DateTime? timestamp;
+      if (timestampStr != null) {
+        timestamp = DateTime.parse(timestampStr);
+      }
+
+      return {
+        'xorKey': xorKey,
+        'aesKey': aesKey,
+        'timestamp': timestamp,
+        'formattedTime': timestamp != null
+            ? '${timestamp.year}-${timestamp.month.toString().padLeft(2, '0')}-${timestamp.day.toString().padLeft(2, '0')} ${timestamp.hour.toString().padLeft(2, '0')}:${timestamp.minute.toString().padLeft(2, '0')}:${timestamp.second.toString().padLeft(2, '0')}'
+            : '未知时间'
+      };
+    } catch (e) {
+      print('获取图片密钥信息失败: $e');
+      return null;
+    }
+  }
+
+  /// 清除图片密钥
+  static Future<bool> clearImageKeys() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final success1 = await prefs.remove(_keyImageXorKey);
+      final success2 = await prefs.remove(_keyImageAesKey);
+      final success3 = await prefs.remove(_keyImageKeyTimestamp);
+      return success1 && success2 && success3;
+    } catch (e) {
+      print('清除图片密钥失败: $e');
       return false;
     }
   }

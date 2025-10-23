@@ -9,6 +9,7 @@ import 'services/dll_injector.dart';
 import 'services/key_storage.dart';
 import 'services/log_reader.dart';
 import 'services/app_logger.dart';
+import 'services/image_key_service.dart';
 import 'widgets/settings_dialog.dart';
 
 void main() async {
@@ -224,6 +225,12 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
   String? _savedKey;
   DateTime? _keyTimestamp;
   
+  // 图片密钥相关
+  int? _imageXorKey;
+  String? _imageAesKey;
+  DateTime? _imageKeyTimestamp;
+  bool _isGettingImageKey = false;
+  
   // 版本和DLL相关
   String? _wechatVersion;
   
@@ -292,14 +299,25 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
   /// 加载保存的数据
   Future<void> _loadSavedData() async {
     try {
-      // 加载保存的密钥信息
+      // 加载保存的数据库密钥信息
       final keyInfo = await KeyStorage.getKeyInfo();
       if (keyInfo != null) {
         setState(() {
           _savedKey = keyInfo['key'] as String;
           _keyTimestamp = keyInfo['timestamp'] as DateTime?;
         });
-        await AppLogger.info('成功加载已保存的密钥信息');
+        await AppLogger.info('成功加载已保存的数据库密钥信息');
+      }
+      
+      // 加载保存的图片密钥信息
+      final imageKeyInfo = await KeyStorage.getImageKeyInfo();
+      if (imageKeyInfo != null) {
+        setState(() {
+          _imageXorKey = imageKeyInfo['xorKey'] as int;
+          _imageAesKey = imageKeyInfo['aesKey'] as String;
+          _imageKeyTimestamp = imageKeyInfo['timestamp'] as DateTime?;
+        });
+        await AppLogger.info('成功加载已保存的图片密钥信息');
       }
     } catch (e, stackTrace) {
       await AppLogger.error('加载保存的数据失败', e, stackTrace);
@@ -655,6 +673,57 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
       _showAnimatedToast('密钥已复制到剪贴板', Colors.green, Icons.copy);
     } catch (e) {
       _showAnimatedToast('复制失败: $e', Colors.red, Icons.error);
+    }
+  }
+
+  /// 获取图片密钥（XOR和AES）
+  Future<void> _getImageKeys() async {
+    if (!_isWechatRunning) {
+      _showAnimatedToast('请先启动微信', Colors.orange, Icons.warning);
+      return;
+    }
+
+    setState(() {
+      _isGettingImageKey = true;
+    });
+
+    try {
+      _addLogMessage('INFO', '开始获取图片密钥...');
+      await AppLogger.info('开始获取图片密钥');
+
+      final result = await ImageKeyService.getImageKeys();
+
+      if (result.success && result.xorKey != null && result.aesKey != null) {
+        final saveSuccess = await KeyStorage.saveImageKeys(result.xorKey!, result.aesKey!);
+        
+        if (saveSuccess) {
+          setState(() {
+            _imageXorKey = result.xorKey;
+            _imageAesKey = result.aesKey;
+            _imageKeyTimestamp = DateTime.now();
+          });
+          
+          _addLogMessage('SUCCESS', '图片密钥获取成功');
+          await AppLogger.success('图片密钥获取成功: XOR=0x${result.xorKey!.toRadixString(16).toUpperCase()}, AES=${result.aesKey}');
+          _showAnimatedToast('图片密钥获取成功', Colors.green, Icons.check_circle);
+        } else {
+          _addLogMessage('ERROR', '图片密钥保存失败');
+          await AppLogger.error('图片密钥保存失败');
+          _showAnimatedToast('图片密钥保存失败', Colors.red, Icons.error);
+        }
+      } else {
+        _addLogMessage('ERROR', result.error ?? '图片密钥获取失败');
+        await AppLogger.error('图片密钥获取失败: ${result.error}');
+        _showAnimatedToast(result.error ?? '图片密钥获取失败', Colors.red, Icons.error);
+      }
+    } catch (e, stackTrace) {
+      _addLogMessage('ERROR', '获取图片密钥时出错');
+      await AppLogger.error('获取图片密钥时出错', e, stackTrace);
+      _showAnimatedToast('获取图片密钥时出错: $e', Colors.red, Icons.error);
+    } finally {
+      setState(() {
+        _isGettingImageKey = false;
+      });
     }
   }
 
@@ -1397,6 +1466,44 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
     );
   }
 
+  Widget _buildImageKeyButton() {
+    return Container(
+      width: double.infinity,
+      height: 48,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.blue.withOpacity(0.15),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: ElevatedButton.icon(
+        onPressed: _getImageKeys,
+        label: const Text(
+          '获取图片密钥',
+          style: TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w500,
+            fontFamily: 'HarmonyOS_SansSC',
+            letterSpacing: 0.3,
+          ),
+        ),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: Colors.blue.shade600,
+          foregroundColor: Colors.white,
+          elevation: 0,
+          shadowColor: Colors.transparent,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildSimpleKeyCard() {
     return Container(
       padding: const EdgeInsets.all(20),
@@ -1421,7 +1528,7 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
           Row(
             children: [
               Text(
-                '密钥',
+                '数据库密钥',
                 style: TextStyle(
                   fontSize: 14,
                   fontWeight: FontWeight.w600,
@@ -1483,6 +1590,170 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
                 const SizedBox(width: 6),
                 Text(
                   '获取时间: ${_keyTimestamp!.toString().substring(0, 19)}',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Colors.grey.shade600,
+                    fontFamily: 'HarmonyOS_SansSC',
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildImageKeyCard() {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: Colors.blue.withOpacity(0.15),
+          width: 1.5,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.blue.withOpacity(0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Text(
+                '图片密钥',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.grey.shade800,
+                  fontFamily: 'HarmonyOS_SansSC',
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.grey.shade50,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Text(
+                      'XOR 密钥:',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.grey.shade700,
+                        fontFamily: 'HarmonyOS_SansSC',
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: SelectableText(
+                        '0x${_imageXorKey!.toRadixString(16).toUpperCase().padLeft(2, '0')}',
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontFamily: 'HarmonyOS_SansSC',
+                          color: Colors.black87,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    ),
+                    TextButton.icon(
+                      onPressed: () => _copyKeyToClipboard('0x${_imageXorKey!.toRadixString(16).toUpperCase().padLeft(2, '0')}'),
+                      icon: const Icon(Icons.content_copy_rounded, size: 14, color: Colors.blue),
+                      label: const Text(
+                        '复制',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.blue,
+                          fontFamily: 'HarmonyOS_SansSC',
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        backgroundColor: Colors.blue.withOpacity(0.08),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const Divider(height: 24),
+                Row(
+                  children: [
+                    Text(
+                      'AES 密钥:',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.grey.shade700,
+                        fontFamily: 'HarmonyOS_SansSC',
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: SelectableText(
+                        _imageAesKey!,
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontFamily: 'HarmonyOS_SansSC',
+                          color: Colors.black87,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    ),
+                    TextButton.icon(
+                      onPressed: () => _copyKeyToClipboard(_imageAesKey!),
+                      icon: const Icon(Icons.content_copy_rounded, size: 14, color: Colors.blue),
+                      label: const Text(
+                        '复制',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.blue,
+                          fontFamily: 'HarmonyOS_SansSC',
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        backgroundColor: Colors.blue.withOpacity(0.08),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          if (_imageKeyTimestamp != null) ...[
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Icon(
+                  Icons.access_time_rounded,
+                  size: 14,
+                  color: Colors.grey.shade500,
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  '获取时间: ${_imageKeyTimestamp!.toString().substring(0, 19)}',
                   style: TextStyle(
                     fontSize: 12,
                     color: Colors.grey.shade600,
@@ -1678,11 +1949,22 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
                     // 操作按钮
                     if (!_isDllInjected && !_isLoading)
                       _buildSimpleActionButton(),
+                    const SizedBox(height: 20),
+                    
+                    // 图片密钥获取按钮
+                    if (_isWechatRunning && !_isGettingImageKey)
+                      _buildImageKeyButton(),
                     const SizedBox(height: 32),
                     
-                    // 密钥显示
+                    // 数据库密钥显示
                     if (_savedKey != null) ...[
                       _buildSimpleKeyCard(),
+                      const SizedBox(height: 20),
+                    ],
+                    
+                    // 图片密钥显示
+                    if (_imageXorKey != null && _imageAesKey != null) ...[
+                      _buildImageKeyCard(),
                       const SizedBox(height: 28),
                     ],
                     
