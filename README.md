@@ -17,8 +17,6 @@
 欢迎大家看看我的这个项目：[EchoTrace - 一个微信聊天记录导出与分析，年度报告应用](https://github.com/ycccccccy/echotrace)
 
 
-
-
 ## 支持版本
 
 - 4.1.2.17 (**2025-10-22**)
@@ -124,6 +122,12 @@ MIT 许可证允许您自由使用、修改和分发本软件，但需要保留�
 3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
 4. 推送到分支 (`git push origin feature/AmazingFeature`)
 5. 开启 Pull Request
+
+### 致谢
+
+感谢以下项目的贡献和启发：
+
+- [WxDatDecrypt](https://github.com/recarto404/WxDatDecrypt) - 提供了关键的imagekey获取思路
 
 ---
 
