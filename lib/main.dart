@@ -691,7 +691,50 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
       _addLogMessage('INFO', '开始获取图片密钥...');
       await AppLogger.info('开始获取图片密钥');
 
-      final result = await ImageKeyService.getImageKeys();
+      // 首次尝试自动获取
+      var result = await ImageKeyService.getImageKeys();
+
+      // 如果需要手动选择目录
+      if (!result.success && result.needManualSelection) {
+        _addLogMessage('WARNING', '未找到微信缓存目录，请手动选择');
+        await AppLogger.warning('未找到微信缓存目录，请求用户手动选择');
+        
+        // 显示确认对话框
+        final shouldSelectManually = await _showConfirmDialog(
+          title: '未找到缓存目录',
+          content: '无法自动找到微信缓存目录。\n\n通常位于：\nDocuments\\xwechat_files\\你的账号ID\n\n是否手动选择目录？',
+          confirmText: '手动选择',
+          cancelText: '取消',
+        );
+        
+        if (!shouldSelectManually) {
+          _addLogMessage('WARNING', '用户取消手动选择');
+          await AppLogger.info('用户取消手动选择微信缓存目录');
+          setState(() {
+            _isGettingImageKey = false;
+          });
+          return;
+        }
+        
+        // 让用户选择目录
+        final selectedDirectory = await ImageKeyService.selectWeChatCacheDirectory();
+        
+        if (selectedDirectory == null || selectedDirectory.isEmpty) {
+          _addLogMessage('WARNING', '未选择目录');
+          await AppLogger.info('用户未选择微信缓存目录');
+          _showAnimatedToast('未选择目录', Colors.orange, Icons.warning);
+          setState(() {
+            _isGettingImageKey = false;
+          });
+          return;
+        }
+        
+        _addLogMessage('INFO', '已选择目录，重新尝试获取密钥...');
+        await AppLogger.info('用户选择了目录: $selectedDirectory');
+        
+        // 使用选择的目录重新获取
+        result = await ImageKeyService.getImageKeys(manualDirectory: selectedDirectory);
+      }
 
       if (result.success && result.xorKey != null && result.aesKey != null) {
         final saveSuccess = await KeyStorage.saveImageKeys(result.xorKey!, result.aesKey!);

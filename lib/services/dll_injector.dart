@@ -131,7 +131,15 @@ class DllInjector {
       return false;
     }
 
-    final mainPid = findMainWeChatPid();
+    // 找到所有指定进程名的 pid
+    final pids = findProcessIds(processName);
+
+    if (pids.isEmpty) {
+      return false;
+    }
+
+    // 从这些进程中找到拥有微信窗口的主进程
+    final mainPid = _findMainPidFromCandidates(pids);
 
     if (mainPid == null) {
       return false;
@@ -787,6 +795,45 @@ class DllInjector {
     }
     
     return false;
+  }
+
+  /// 从候选进程中找到拥有微信窗口的主进程
+  static int? _findMainPidFromCandidates(List<int> candidatePids) {
+    if (candidatePids.isEmpty) {
+      return null;
+    }
+
+    final enumWindowsProc = Pointer.fromFunction<EnumWindowsProc>(_enumWindowsProc, 0);
+    final pidsPtr = calloc<Pointer<Int32>>();
+    pidsPtr.value = calloc<Int32>(100);
+    
+    // 初始化数组为0
+    for (int i = 0; i < 100; i++) {
+      pidsPtr.value[i] = 0;
+    }
+    
+    try {
+      EnumWindows(enumWindowsProc, pidsPtr.address);
+      
+      final windowPids = <int>[];
+      for (int i = 0; i < 100; i++) {
+        final pid = pidsPtr.value[i];
+        if (pid == 0) break;
+        windowPids.add(pid);
+      }
+      
+      // 找到既在候选列表中，又有微信窗口的进程
+      for (final pid in candidatePids) {
+        if (windowPids.contains(pid)) {
+          return pid;
+        }
+      }
+      
+      return null;
+    } finally {
+      free(pidsPtr.value);
+      free(pidsPtr);
+    }
   }
 
   static int? findMainWeChatPid() {

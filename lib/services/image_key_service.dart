@@ -5,6 +5,7 @@ import 'package:ffi/ffi.dart';
 import 'package:win32/win32.dart';
 import 'package:path/path.dart' as path;
 import 'package:pointycastle/export.dart';
+import 'package:file_picker/file_picker.dart';
 import 'dll_injector.dart';
 
 final class MEMORY_BASIC_INFORMATION extends Struct {
@@ -35,12 +36,14 @@ class ImageKeyResult {
   final String? aesKey;
   final String? error;
   final bool success;
+  final bool needManualSelection;
 
   ImageKeyResult.success(this.xorKey, this.aesKey)
       : success = true,
-        error = null;
+        error = null,
+        needManualSelection = false;
 
-  ImageKeyResult.failure(this.error)
+  ImageKeyResult.failure(this.error, {this.needManualSelection = false})
       : success = false,
         xorKey = null,
         aesKey = null;
@@ -426,13 +429,37 @@ class ImageKeyService {
     }
   }
 
-  /// 获取图片密钥（XOR和AES）
-  static Future<ImageKeyResult> getImageKeys() async {
+  /// 让用户手动选择微信缓存目录
+  static Future<String?> selectWeChatCacheDirectory() async {
     try {
+      String? selectedDirectory = await FilePicker.platform.getDirectoryPath(
+        dialogTitle: '请选择微信账号目录（通常在 Documents/xwechat_files 下）',
+      );
       
-      final cacheDir = await getWeChatCacheDirectory();
+      return selectedDirectory;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /// 获取图片密钥（XOR和AES）
+  /// [manualDirectory] 可选参数，用户手动选择的目录
+  static Future<ImageKeyResult> getImageKeys({String? manualDirectory}) async {
+    try {
+      String? cacheDir;
+      
+      // 如果提供了手动选择的目录，使用它；否则自动查找
+      if (manualDirectory != null && manualDirectory.isNotEmpty) {
+        cacheDir = manualDirectory;
+      } else {
+        cacheDir = await getWeChatCacheDirectory();
+      }
+      
       if (cacheDir == null) {
-        return ImageKeyResult.failure('未找到微信缓存目录，请查看日志获取详细信息');
+        return ImageKeyResult.failure(
+          '未找到微信缓存目录，请手动选择目录',
+          needManualSelection: true,
+        );
       }
 
 
