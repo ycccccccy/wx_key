@@ -1,4 +1,4 @@
-# 微信数据库key提取工具
+# 微信数据库与图片密钥提取工具
 
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows-lightgrey.svg)](https://www.microsoft.com/windows)
@@ -9,6 +9,8 @@
 ## 项目简介
 
 本项目是一个在微信4.1及以上版本中获取微信数据库和解密微信缓存图片的密钥的工具
+
+This project is a tool for obtaining WeChat database and decrypting WeChat cache image keys in WeChat 4.1 and above versions
 
 ![效果截图](app.jpg)
 
