@@ -20,26 +20,26 @@ static std::string g_logFilePath;
 // --- 辅助函数：将本地编码字符串转换为UTF-8 ---
 std::string ConvertToUtf8(const std::string& localStr) {
     if (localStr.empty()) return "";
-    
+
     // 1. 转换为宽字符（UTF-16）
     int wideSize = MultiByteToWideChar(CP_ACP, 0, localStr.c_str(), -1, nullptr, 0);
     if (wideSize <= 0) return localStr;
-    
+
     std::wstring wideStr(wideSize, 0);
     MultiByteToWideChar(CP_ACP, 0, localStr.c_str(), -1, &wideStr[0], wideSize);
-    
+
     // 2. 转换为UTF-8
     int utf8Size = WideCharToMultiByte(CP_UTF8, 0, wideStr.c_str(), -1, nullptr, 0, nullptr, nullptr);
     if (utf8Size <= 0) return localStr;
-    
+
     std::string utf8Str(utf8Size, 0);
     WideCharToMultiByte(CP_UTF8, 0, wideStr.c_str(), -1, &utf8Str[0], utf8Size, nullptr, nullptr);
-    
+
     // 移除末尾的空字符
     if (!utf8Str.empty() && utf8Str.back() == '\0') {
         utf8Str.pop_back();
     }
-    
+
     return utf8Str;
 }
 
@@ -62,7 +62,8 @@ void WriteLogToFile(const std::string& message) {
             logFile.flush();
             logFile.close();
         }
-    } catch (...) {
+    }
+    catch (...) {
         // 忽略写入错误
     }
 }
@@ -93,10 +94,10 @@ DWORD WINAPI KeyProcessorThread(LPVOID lpParam)
             std::string keyHex = ss.str();
 
             WriteLogToFile("SUCCESS:密钥获取成功");
-            
+
             // 将密钥写入日志文件
             WriteLogToFile("KEY:" + keyHex);
-            
+
             WriteLogToFile("SUCCESS:密钥已写入日志文件");
         }
     }
@@ -150,23 +151,23 @@ uintptr_t FindPattern(const char* moduleName, const char* pattern, const char* m
 DWORD WINAPI MainThread(HMODULE hModule)
 {
     g_currentProcessId = GetCurrentProcessId();
-    
+
     // 初始化日志文件路径
     g_logFilePath = GetLogFilePath();
-    
+
     WriteLogToFile("INFO:DLL注入成功，正在初始化");
     WriteLogToFile("INFO:等待微信界面初始化");
-    
+
     while (!g_isWindowReady) { EnumWindows(EnumWindowsProc, 0); Sleep(500); }
     WriteLogToFile("SUCCESS:微信界面已就绪");
 
-    // 直接使用RVA（此处RVA为4.1.2.11版本的）
+    // 直接使用RVA（此处RVA为特定版本的）
     HMODULE hWeixin = GetModuleHandleA("Weixin.dll");
     if (!hWeixin) {
         WriteLogToFile("ERROR:未能获取Weixin.dll模块句柄");
         Sleep(10000); return 0;
     }
-    const uintptr_t rva_setCipherKey = 0x4BBBC0;
+    const uintptr_t rva_setCipherKey = 0x59E2450;
     uintptr_t setCipherKeyAddr = (uintptr_t)hWeixin + rva_setCipherKey;
     g_targetAddress = setCipherKeyAddr;
     WriteLogToFile("SUCCESS:目标地址计算成功");
