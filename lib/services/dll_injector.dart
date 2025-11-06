@@ -5,7 +5,9 @@ import 'package:ffi/ffi.dart';
 import 'package:win32/win32.dart';
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as path;
+import 'package:file_picker/file_picker.dart';
 import 'key_storage.dart';
+import 'app_logger.dart';
 
 class DllDownloadResult {
   final bool success;
@@ -74,17 +76,25 @@ class DllInjector {
   }
 
   static bool injectDllByPid(int pid, String dllPath) {
+    AppLogger.info('开始DLL注入到进程 $pid');
 
     final hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
     if (hProcess == 0) {
+      final error = getLastErrorMessage();
+      AppLogger.error('无法打开目标进程 $pid: $error');
       return false;
     }
+    AppLogger.info('成功打开进程句柄');
+
     final remoteMemory = VirtualAllocEx(
         hProcess, nullptr, dllPath.length + 1, MEM_COMMIT, PAGE_READWRITE);
     if (remoteMemory == nullptr) {
+      final error = getLastErrorMessage();
+      AppLogger.error('无法在目标进程中分配内存: $error');
       CloseHandle(hProcess);
       return false;
     }
+    AppLogger.info('成功分配远程内存');
 
     final dllPathC = dllPath.toNativeUtf8();
     final written = calloc<SIZE_T>();
@@ -92,10 +102,13 @@ class DllInjector {
       if (WriteProcessMemory(hProcess, remoteMemory, dllPathC,
               dllPath.length + 1, written) ==
           0) {
+        final error = getLastErrorMessage();
+        AppLogger.error('无法写入DLL路径到目标进程: $error');
         VirtualFreeEx(hProcess, remoteMemory, 0, MEM_RELEASE);
         CloseHandle(hProcess);
         return false;
       }
+      AppLogger.info('成功写入DLL路径到远程内存');
     } finally {
       free(dllPathC);
       free(written);
@@ -104,30 +117,42 @@ class DllInjector {
     final hKernel32 = GetModuleHandle('kernel32.dll'.toNativeUtf16());
     final loadLibraryAddr = GetProcAddress(hKernel32, 'LoadLibraryA'.toNativeUtf8().cast());
     if (loadLibraryAddr == nullptr) {
+      final error = getLastErrorMessage();
+      AppLogger.error('无法获取LoadLibraryA函数地址: $error');
       VirtualFreeEx(hProcess, remoteMemory, 0, MEM_RELEASE);
       CloseHandle(hProcess);
       return false;
     }
+    AppLogger.info('成功获取LoadLibraryA函数地址');
 
     final hThread = CreateRemoteThread(
         hProcess, nullptr, 0, loadLibraryAddr.cast(), remoteMemory, 0, nullptr);
     if (hThread == 0) {
+      final error = getLastErrorMessage();
+      AppLogger.error('无法创建远程线程: $error');
       VirtualFreeEx(hProcess, remoteMemory, 0, MEM_RELEASE);
       CloseHandle(hProcess);
       return false;
     }
+    AppLogger.info('成功创建远程线程');
 
-    WaitForSingleObject(hThread, INFINITE);
+    // ignore: unused_local_variable
+    final waitResult = WaitForSingleObject(hThread, INFINITE);
+    AppLogger.info('远程线程执行完成');
 
     VirtualFreeEx(hProcess, remoteMemory, 0, MEM_RELEASE);
     CloseHandle(hThread);
     CloseHandle(hProcess);
+    AppLogger.success('DLL注入流程全部完成');
 
     return true;
   }
 
   static bool injectDll(String processName, String dllPath) {
+    AppLogger.info('开始准备DLL注入，目标进程: $processName');
+    
     if (!File(dllPath).existsSync()) {
+      AppLogger.error('DLL文件不存在: $dllPath');
       return false;
     }
 
@@ -135,20 +160,26 @@ class DllInjector {
     final pids = findProcessIds(processName);
 
     if (pids.isEmpty) {
+      AppLogger.error('未找到目标进程 $processName');
       return false;
     }
+    AppLogger.info('找到 ${pids.length} 个目标进程: $pids');
 
     // 从这些进程中找到拥有微信窗口的主进程
     final mainPid = _findMainPidFromCandidates(pids);
 
     if (mainPid == null) {
+      AppLogger.error('未能从候选进程中找到主进程窗口');
       return false;
     }
+    AppLogger.info('成功确定主进程 PID: $mainPid');
 
     
     if (injectDllByPid(mainPid, dllPath)) {
+      AppLogger.success('DLL注入成功完成');
       return true;
     } else {
+      AppLogger.error('DLL注入失败');
       return false;
     }
   }
@@ -598,7 +629,8 @@ class DllInjector {
   static Future<DllDownloadResult> downloadDll(String version) async {
     try {
       final tempDir = Directory.systemTemp;
-      final dllPath = path.join(tempDir.path, 'wx_key-$version.dll');
+      // 使用通用的 wx_key.dll
+      final dllPath = path.join(tempDir.path, 'wx_key.dll');
       final dllFile = File(dllPath);
       
       // 先检查本地是否已有该DLL文件
@@ -612,8 +644,8 @@ class DllInjector {
         await dllFile.delete();
       }
       
-      // 本地没有或文件损坏，从GitHub下载
-      final url = 'https://github.com/ycccccccy/wx_key/releases/download/dlls/wx_key-$version.dll';
+      // 本地没有或文件损坏，从GitHub下载通用DLL
+      final url = 'https://github.com/ycccccccy/wx_key/releases/download/dlls/wx_key.dll';
       
       try {
         final response = await http.get(
@@ -625,7 +657,7 @@ class DllInjector {
           await dllFile.writeAsBytes(response.bodyBytes);
           return DllDownloadResult.success(dllPath);
         } else if (response.statusCode == 404) {
-          // 404 表示该版本不存在
+          // 404 表示DLL文件不存在
           return DllDownloadResult.failure(DllDownloadError.versionNotFound);
         } else {
           // 其他HTTP错误视为网络问题
@@ -647,6 +679,28 @@ class DllInjector {
     } catch (e) {
       // 其他未知错误，默认视为网络问题
       return DllDownloadResult.failure(DllDownloadError.networkError);
+    }
+  }
+
+  /// 手动选择DLL文件
+  static Future<String?> selectDllFile() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        dialogTitle: '请选择DLL文件',
+        type: FileType.custom,
+        allowedExtensions: ['dll'],
+      );
+      
+      if (result != null && result.files.isNotEmpty) {
+        final file = File(result.files.first.path!);
+        if (await file.exists()) {
+          return result.files.first.path;
+        }
+      }
+      
+      return null;
+    } catch (e) {
+      return null;
     }
   }
 
@@ -749,20 +803,18 @@ class DllInjector {
       }
       
       if (wechatPath == null || !await File(wechatPath).exists()) {
-        print('[启动微信] 未找到微信可执行文件');
         return false;
       }
       
-      print('[启动微信] 找到微信路径: $wechatPath');
       
       // 启动微信进程
+      // ignore: unused_local_variable
       final process = await Process.start(
         wechatPath, 
         [],
         mode: ProcessStartMode.detached,
       );
       
-      print('[启动微信] 微信进程已启动，PID: ${process.pid}');
       
       // 等待进程启动
       await Future.delayed(const Duration(seconds: 2));
@@ -770,15 +822,11 @@ class DllInjector {
       // 检查微信进程是否在运行
       final isRunning = isProcessRunning('Weixin.exe');
       if (isRunning) {
-        print('[启动微信] 微信进程运行确认成功');
         return true;
       } else {
-        print('[启动微信] 未检测到微信进程');
         return false;
       }
-    } catch (e, stackTrace) {
-      print('[启动微信] 启动失败: $e');
-      print('[启动微信] 堆栈跟踪: $stackTrace');
+    } catch (e) {
       return false;
     }
   }
@@ -799,6 +847,8 @@ class DllInjector {
 
   /// 从候选进程中找到拥有微信窗口的主进程
   static int? _findMainPidFromCandidates(List<int> candidatePids) {
+    AppLogger.info('开始查找主进程，候选进程: $candidatePids');
+    
     if (candidatePids.isEmpty) {
       return null;
     }
@@ -822,13 +872,17 @@ class DllInjector {
         windowPids.add(pid);
       }
       
+      AppLogger.info('找到 ${windowPids.length} 个拥有微信窗口的进程: $windowPids');
+      
       // 找到既在候选列表中，又有微信窗口的进程
       for (final pid in candidatePids) {
         if (windowPids.contains(pid)) {
+          AppLogger.success('成功确定主进程 PID: $pid');
           return pid;
         }
       }
       
+      AppLogger.warning('候选进程列表: $candidatePids, 窗口进程列表: $windowPids, 无交集');
       return null;
     } finally {
       free(pidsPtr.value);

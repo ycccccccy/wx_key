@@ -7,6 +7,7 @@ import 'package:path/path.dart' as path;
 import 'package:pointycastle/export.dart';
 import 'package:file_picker/file_picker.dart';
 import 'dll_injector.dart';
+import 'app_logger.dart';
 
 final class MEMORY_BASIC_INFORMATION extends Struct {
   @IntPtr()
@@ -282,22 +283,33 @@ class ImageKeyService {
 
   /// 从微信进程内存中搜索AES密钥
   static Future<String?> _getAesKeyFromMemory(int pid, Uint8List ciphertext) async {
+    AppLogger.info('开始内存搜索，目标进程: $pid');
     
     final hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
     if (hProcess == 0) {
+      AppLogger.error('无法打开进程进行内存搜索');
       return null;
     }
 
     try {
       final memoryRegions = _getMemoryRegions(hProcess);
+      AppLogger.info('找到 ${memoryRegions.length} 个内存区域');
 
+      var scannedCount = 0;
+      var skippedCount = 0;
+      
       for (var region in memoryRegions) {
         final baseAddress = region.$1;
         final regionSize = region.$2;
         
         // 跳过太大的内存区域
         if (regionSize > 100 * 1024 * 1024) {
+          skippedCount++;
           continue;
+        }
+        
+        scannedCount++;
+        if (scannedCount % 100 == 0) {
         }
         
         final memory = _readProcessMemory(hProcess, baseAddress, regionSize);
@@ -331,6 +343,7 @@ class ImageKeyService {
             final keyBytes = memory.sublist(i + 1, i + 33);
             
             if (_verifyKey(ciphertext, keyBytes)) {
+              AppLogger.success('在第 $scannedCount 个区域找到AES密钥');
               CloseHandle(hProcess);
               return String.fromCharCodes(keyBytes);
             }
@@ -340,9 +353,11 @@ class ImageKeyService {
         }
       }
 
+      AppLogger.warning('内存搜索完成但未找到密钥，扫描: $scannedCount, 跳过: $skippedCount');
       CloseHandle(hProcess);
       return null;
-    } catch (e, _) {
+    } catch (e) {
+      AppLogger.error('内存搜索异常: $e');
       CloseHandle(hProcess);
       return null;
     }
@@ -446,6 +461,8 @@ class ImageKeyService {
   /// [manualDirectory] 可选参数，用户手动选择的目录
   static Future<ImageKeyResult> getImageKeys({String? manualDirectory}) async {
     try {
+      AppLogger.info('开始获取图片密钥');
+      
       String? cacheDir;
       
       // 如果提供了手动选择的目录，使用它；否则自动查找
@@ -456,47 +473,62 @@ class ImageKeyService {
       }
       
       if (cacheDir == null) {
+        AppLogger.error('未找到微信缓存目录');
         return ImageKeyResult.failure(
           '未找到微信缓存目录，请手动选择目录',
           needManualSelection: true,
         );
       }
+      AppLogger.info('找到缓存目录: $cacheDir');
 
 
       final templateFiles = await _findTemplateDatFiles(cacheDir);
       if (templateFiles.isEmpty) {
+        AppLogger.error('未找到模板文件');
         return ImageKeyResult.failure('未找到模板文件，可能该微信账号没有图片缓存');
       }
+      AppLogger.info('找到 ${templateFiles.length} 个模板文件');
 
 
       final xorKey = await _getXorKey(templateFiles);
       if (xorKey == null) {
+        AppLogger.error('无法获取XOR密钥');
         return ImageKeyResult.failure('无法获取XOR密钥');
       }
+      AppLogger.info('成功获取XOR密钥: ${xorKey.toRadixString(16).padLeft(2, '0')}');
 
 
       final ciphertext = await _getCiphertextFromTemplate(templateFiles);
       if (ciphertext == null) {
+        AppLogger.error('无法读取加密数据');
         return ImageKeyResult.failure('无法读取加密数据');
       }
+      AppLogger.info('成功读取 ${ciphertext.length} 字节加密数据');
 
 
       final pids = DllInjector.findProcessIds('Weixin.exe');
       if (pids.isEmpty) {
+        AppLogger.error('微信进程未运行');
         return ImageKeyResult.failure('微信进程未运行');
       }
+      AppLogger.info('找到微信进程 PID: ${pids.first}');
 
 
+      AppLogger.info('开始从内存中搜索AES密钥');
       final aesKey = await _getAesKeyFromMemory(pids.first, ciphertext);
       if (aesKey == null) {
+        AppLogger.error('无法从内存中获取AES密钥');
         return ImageKeyResult.failure('无法从内存中获取AES密钥');
       }
+      AppLogger.success('成功获取AES密钥: ${aesKey.substring(0, 16)}');
 
 
+      AppLogger.success('图片密钥获取完成');
       return ImageKeyResult.success(xorKey, aesKey.substring(0, 16));
-    } catch (e, _) {
+    } catch (e) {
+      AppLogger.error('获取密钥失败: $e');
       return ImageKeyResult.failure('获取密钥失败: $e');
     }
-  }
+  } 
 }
 

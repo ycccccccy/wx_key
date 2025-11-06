@@ -1,8 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:url_launcher/url_launcher.dart';
 import 'package:window_manager/window_manager.dart';
-import 'package:file_picker/file_picker.dart';
 import 'dart:io';
 import 'dart:async';
 import 'services/dll_injector.dart';
@@ -445,7 +443,9 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
         await _cleanupResources();
         setState(() {
           _statusMessage = '密钥获取超时，请重新尝试';
+          _isDllInjected = false;
         });
+        _addLogMessage('WARNING', '密钥获取超时，请重新尝试');
       }
     });
   }
@@ -480,9 +480,9 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
       setState(() {
         _statusMessage = '正在从GitHub下载DLL文件';
       });
-      await AppLogger.info('开始下载DLL文件，版本: $_wechatVersion');
+      await AppLogger.info('开始下载通用DLL文件');
 
-      final downloadResult = await DllInjector.downloadDll(_wechatVersion!);
+      final downloadResult = await DllInjector.downloadDll(_wechatVersion ?? '');
       if (!downloadResult.success) {
         // 下载失败，根据错误类型处理
         if (downloadResult.error == DllDownloadError.networkError) {
@@ -498,17 +498,15 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
           _showNetworkErrorDialog();
           return;
         } else if (downloadResult.error == DllDownloadError.versionNotFound) {
-          _addLogMessage('ERROR', '版本未适配');
-          await AppLogger.error('版本未适配: $_wechatVersion，GitHub上没有对应的DLL文件');
+          _addLogMessage('ERROR', 'DLL文件不存在');
+          await AppLogger.error('无法找到DLL文件: GitHub上没有wx_key.dll文件');
           setState(() {
             _isLoading = false;
-            _statusMessage = '版本未适配';
+            _statusMessage = 'DLL文件不存在，请检查网络连接';
           });
           // 停止日志监控并清理资源
           await _cleanupResources();
-          // 比较版本，显示不同的提示
-          final versionComparison = await DllInjector.compareWithLatestVersion(_wechatVersion!);
-          _showVersionNotSupportedDialog(versionComparison);
+          _showAnimatedToast('无法下载DLL文件，请重试', Colors.red, Icons.error);
           return;
         } else {
           // 文件系统错误或其他错误
@@ -805,9 +803,7 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
               // 如果还没有获取到密钥，提示用户
               if (_extractedKey == null && mounted) {
                 setState(() {
-                  if (_statusMessage.contains('监听')) {
-                    _statusMessage = '微信已退出，未获取到密钥';
-                  }
+                  _statusMessage = '微信已退出，未获取到密钥，请重新尝试';
                 });
                 _addLogMessage('WARNING', '微信已退出，未获取到密钥');
               }
@@ -975,9 +971,9 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                '无法从 GitHub 下载微信版本 $_wechatVersion 的 DLL 文件。',
-                style: const TextStyle(
+              const Text(
+                '无法从 GitHub 下载 DLL 文件。',
+                style: TextStyle(
                   fontSize: 14,
                   fontFamily: 'HarmonyOS_SansSC',
                   height: 1.5,
@@ -994,7 +990,7 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
               ),
               const SizedBox(height: 8),
               const Text(
-                '你可以自行前往github下载对应版本的 DLL 文件继续。',
+                '请检查网络连接后重试。',
                 style: TextStyle(
                   fontSize: 14,
                   fontFamily: 'HarmonyOS_SansSC',
@@ -1016,39 +1012,19 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
                 ),
               ),
             ),
-            OutlinedButton.icon(
-              onPressed: () async {
-                Navigator.of(context).pop();
-                _openDllDownloadPage();
-              },
-              style: OutlinedButton.styleFrom(
-                foregroundColor: Colors.blue,
-                side: const BorderSide(color: Colors.blue),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
-                ),
-              ),
-              icon: const Icon(Icons.download, size: 18),
-              label: const Text(
-                '前往下载',
-                style: TextStyle(
-                  fontWeight: FontWeight.w600,
-                  fontFamily: 'HarmonyOS_SansSC',
-                ),
-              ),
-            ),
-            OutlinedButton.icon(
+            ElevatedButton.icon(
               onPressed: () async {
                 Navigator.of(context).pop();
                 // 重试下载
                 await _autoInjectDll();
               },
-              style: OutlinedButton.styleFrom(
-                foregroundColor: const Color(0xFF07c160),
-                side: const BorderSide(color: Color(0xFF07c160)),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF07c160),
+                foregroundColor: Colors.white,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(8),
                 ),
+                elevation: 0,
               ),
               icon: const Icon(Icons.refresh, size: 18),
               label: const Text(
@@ -1059,390 +1035,11 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
                 ),
               ),
             ),
-            ElevatedButton.icon(
-              onPressed: () {
-                Navigator.of(context).pop();
-                _continueWithManualDll();
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF07c160),
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                elevation: 0,
-              ),
-              icon: const Icon(Icons.folder_open, size: 18),
-              label: const Text(
-                '选择本地 DLL',
-                style: TextStyle(
-                  fontWeight: FontWeight.w600,
-                  fontFamily: 'HarmonyOS_SansSC',
-                ),
-              ),
-            ),
           ],
         );
       },
     );
   }
-
-  /// 显示版本未适配弹窗
-  /// versionComparison: 1表示当前版本更新, -1表示当前版本更旧, null表示无法比较
-  Future<void> _showVersionNotSupportedDialog(int? versionComparison) async {
-    // 根据版本比较结果确定提示内容
-    String tipMessage;
-    IconData tipIcon;
-    Color tipColor;
-    Color tipIconColor;
-    Color tipTextColor;
-    
-    if (versionComparison == 1) {
-      // 当前版本比最新适配版本更新
-      tipMessage = '当前版本较新以至于作者还没有更新\n请等待作者更新或提交 Issue 提醒作者';
-      tipIcon = Icons.info_outline;
-      tipColor = Colors.blue;
-      tipIconColor = Colors.blue.shade700;
-      tipTextColor = Colors.blue.shade900;
-    } else if (versionComparison == -1) {
-      // 当前版本比最新适配版本更旧
-      tipMessage = '当前的旧版本不再会适配\n建议更新微信到最新版本';
-      tipIcon = Icons.lightbulb_outline;
-      tipColor = Colors.orange;
-      tipIconColor = Colors.orange.shade700;
-      tipTextColor = Colors.orange.shade900;
-    } else {
-      // 无法比较（网络问题等）
-      tipMessage = '建议更新微信到最新版本\n或前往 GitHub 提交 Issue';
-      tipIcon = Icons.lightbulb_outline;
-      tipColor = Colors.orange;
-      tipIconColor = Colors.orange.shade700;
-      tipTextColor = Colors.orange.shade900;
-    }
-    
-    await showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-          ),
-          title: Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: Colors.red.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: const Icon(
-                  Icons.error_outline,
-                  color: Colors.red,
-                  size: 24,
-                ),
-              ),
-              const SizedBox(width: 12),
-              const Expanded(
-                child: Text(
-                  '版本未适配',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w600,
-                    fontFamily: 'HarmonyOS_SansSC',
-                  ),
-                ),
-              ),
-            ],
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                '当前微信版本 $_wechatVersion 暂未适配。',
-                style: const TextStyle(
-                  fontSize: 14,
-                  fontFamily: 'HarmonyOS_SansSC',
-                  height: 1.5,
-                ),
-              ),
-              const SizedBox(height: 12),
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: tipColor.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(
-                    color: tipColor.withOpacity(0.3),
-                    width: 1,
-                  ),
-                ),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Icon(
-                      tipIcon,
-                      color: tipIconColor,
-                      size: 20,
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        tipMessage,
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontFamily: 'HarmonyOS_SansSC',
-                          height: 1.4,
-                          color: tipTextColor,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: Text(
-                '关闭',
-                style: TextStyle(
-                  color: Colors.grey.shade600,
-                  fontWeight: FontWeight.w500,
-                  fontFamily: 'HarmonyOS_SansSC',
-                ),
-              ),
-            ),
-            ElevatedButton.icon(
-              onPressed: () {
-                Navigator.of(context).pop();
-                _openGitHubIssue();
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF07c160),
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                elevation: 0,
-              ),
-              icon: const Icon(Icons.launch, size: 18),
-              label: const Text(
-                '前往 Issue',
-                style: TextStyle(
-                  fontWeight: FontWeight.w600,
-                  fontFamily: 'HarmonyOS_SansSC',
-                ),
-              ),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  /// 打开GitHub Issue页面
-  Future<void> _openGitHubIssue() async {
-    try {
-      final issueUrl = Uri.parse(
-        'https://github.com/ycccccccy/wx_key/issues/new?title=请求适配微信版本 $_wechatVersion&body=当前微信版本：$_wechatVersion%0A%0A请求适配此版本的密钥提取功能。'
-      );
-      
-      // 使用 url_launcher 打开浏览器
-      if (await canLaunchUrl(issueUrl)) {
-        await launchUrl(issueUrl, mode: LaunchMode.externalApplication);
-        _showAnimatedToast('已在浏览器中打开 GitHub Issue', Colors.green, Icons.open_in_new);
-      } else {
-        _showAnimatedToast('无法打开浏览器', Colors.red, Icons.error);
-      }
-    } catch (e) {
-      _showAnimatedToast('打开浏览器失败', Colors.red, Icons.error);
-    }
-  }
-
-  /// 打开DLL下载页面
-  Future<void> _openDllDownloadPage() async {
-    try {
-      final downloadUrl = Uri.parse('https://github.com/ycccccccy/wx_key/releases/tag/dlls');
-      
-      if (await canLaunchUrl(downloadUrl)) {
-        await launchUrl(downloadUrl, mode: LaunchMode.externalApplication);
-        _showAnimatedToast('已在浏览器中打开 DLL 下载页面', Colors.green, Icons.open_in_new);
-      } else {
-        _showAnimatedToast('无法打开浏览器', Colors.red, Icons.error);
-      }
-    } catch (e) {
-      _showAnimatedToast('打开浏览器失败', Colors.red, Icons.error);
-    }
-  }
-
-  /// 手动选择DLL文件
-  Future<String?> _pickDllFile() async {
-    try {
-      final result = await FilePicker.platform.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: ['dll'],
-        dialogTitle: '选择DLL文件',
-      );
-      
-      if (result != null && result.files.single.path != null) {
-        return result.files.single.path!;
-      }
-      return null;
-    } catch (e) {
-      await AppLogger.error('选择DLL文件失败', e);
-      _showAnimatedToast('选择文件失败', Colors.red, Icons.error);
-      return null;
-    }
-  }
-
-  /// 使用手动选择的DLL继续注入流程
-  Future<void> _continueWithManualDll() async {
-    final dllPath = await _pickDllFile();
-    if (dllPath == null) {
-      await AppLogger.info('用户取消选择DLL文件');
-      return;
-    }
-    
-    await AppLogger.info('用户手动选择了DLL文件: $dllPath');
-    _showAnimatedToast('已选择DLL文件', Colors.green, Icons.check_circle);
-    
-    // 启动日志监控
-    await _startLogMonitoring();
-    
-    setState(() {
-      _isLoading = true;
-      _statusMessage = '准备使用手动选择的DLL...';
-    });
-    
-    try {
-      // 检查微信是否运行，如果运行则请求用户确认关闭
-      if (_isWechatRunning) {
-        setState(() {
-          _isLoading = false;
-        });
-        
-        final shouldClose = await _showConfirmDialog(
-          title: '确认关闭微信',
-          content: '检测到微信正在运行，需要重启微信才能注入DLL。\n是否关闭当前微信？',
-          confirmText: '关闭并继续',
-          cancelText: '取消',
-        );
-        
-        if (!shouldClose) {
-          _addLogMessage('WARNING', '用户取消操作');
-          setState(() {
-            _statusMessage = '用户取消操作';
-          });
-          await _cleanupResources();
-          return;
-        }
-        
-        setState(() {
-          _isLoading = true;
-          _statusMessage = '正在关闭现有微信进程...';
-        });
-        _addLogMessage('INFO', '正在关闭现有微信进程...');
-        
-        DllInjector.killWeChatProcesses();
-        await Future.delayed(const Duration(seconds: 2));
-        _addLogMessage('SUCCESS', '已关闭现有微信进程');
-      }
-
-      // 启动微信
-      _addLogMessage('INFO', '正在启动微信...');
-      setState(() {
-        _statusMessage = '正在启动微信...';
-      });
-
-      final launched = await DllInjector.launchWeChat();
-      if (!launched) {
-        _addLogMessage('ERROR', '微信启动失败，请检查微信安装路径');
-        await AppLogger.error('微信启动失败');
-        setState(() {
-          _isLoading = false;
-          _statusMessage = '微信启动失败';
-        });
-        await _cleanupResources();
-        _showAnimatedToast('微信启动失败，请在设置中检查微信路径', Colors.red, Icons.error);
-        return;
-      }
-
-      _addLogMessage('SUCCESS', '微信启动成功');
-
-      // 等待微信窗口出现
-      _addLogMessage('INFO', '等待微信窗口出现...');
-      setState(() {
-        _statusMessage = '等待微信窗口出现...';
-      });
-
-      final windowAppeared = await DllInjector.waitForWeChatWindow(maxWaitSeconds: 15);
-      if (!windowAppeared) {
-        _addLogMessage('ERROR', '等待微信窗口超时，微信可能启动失败');
-        await AppLogger.error('等待微信窗口超时');
-        setState(() {
-          _isLoading = false;
-          _statusMessage = '等待微信窗口超时';
-        });
-        await _cleanupResources();
-        _showAnimatedToast('微信窗口未出现，请手动启动微信后重试', Colors.orange, Icons.warning);
-        return;
-      }
-
-      // 延迟几秒，等待微信完全初始化
-      _addLogMessage('INFO', '等待微信完全启动，请不要点击微信任何按键');
-      setState(() {
-        _statusMessage = '等待微信完全启动...请不要点击微信任何按键';
-      });
-      for (int i = 5; i > 0; i--) {
-        setState(() {
-          _statusMessage = '等待微信完全启动... ($i秒)，请不要点击微信任何按键';
-        });
-        await Future.delayed(const Duration(seconds: 1));
-      }
-
-      // 注入DLL
-      _addLogMessage('INFO', '正在注入DLL...');
-      setState(() {
-        _statusMessage = '正在注入DLL...';
-      });
-
-      final success = DllInjector.injectDll('Weixin.exe', dllPath);
-      
-      if (success) {
-        _addLogMessage('SUCCESS', 'DLL注入成功！等待密钥获取...');
-        await AppLogger.success('DLL注入成功（手动选择），开始等待密钥获取');
-        setState(() {
-          _isDllInjected = true;
-          _statusMessage = 'DLL注入成功！等待密钥获取...';
-        });
-        
-        _startKeyTimeout();
-      } else {
-        _addLogMessage('ERROR', 'DLL注入失败，请确保以管理员身份运行');
-        await AppLogger.error('DLL注入失败（手动选择）');
-        setState(() {
-          _statusMessage = 'DLL注入失败';
-        });
-        await _cleanupResources();
-      }
-    } catch (e, stackTrace) {
-      _addLogMessage('ERROR', '注入过程出错: $e');
-      await AppLogger.error('手动DLL注入过程出错', e, stackTrace);
-      setState(() {
-        _statusMessage = '注入失败: $e';
-      });
-      await _cleanupResources();
-    } finally {
-      setState(() {
-        _isLoading = false;
-      });
-    }
-  }
-
 
   /// 打开设置对话框
   Future<void> _openSettings() async {
@@ -1989,7 +1586,7 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
                     ),
                     const SizedBox(height: 20),
                     
-                    // 操作按钮
+                    // 操作按钮 - 未注入时显示，超时或失败时也会重新显示
                     if (!_isDllInjected && !_isLoading)
                       _buildSimpleActionButton(),
                     const SizedBox(height: 20),
