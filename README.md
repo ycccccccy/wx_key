@@ -4,7 +4,7 @@
 [![Platform](https://img.shields.io/badge/platform-Windows-lightgrey.svg)](https://www.microsoft.com/windows)
 [![Flutter](https://img.shields.io/badge/Flutter-3.9.2+-02569B.svg?logo=flutter)](https://flutter.dev)
 
-> **重要声明**: 本项目仅供技术研究和学习使用，严禁用于任何恶意或非法目的。如果这个项目对你有帮助的话，请给我们一个Star❤️
+> **重要声明**: 本项目仅供技术研究和学习使用，严禁用于任何恶意或非法目的。如果这个项目对你有帮助的话，请给我一个Star❤️
 
 
 ## 项目简介
@@ -13,11 +13,11 @@
 
 This project is a tool for obtaining WeChat database and decrypting WeChat cache image keys in WeChat 4.1 and above versions
 
-![效果截图](app.jpg)
+![截图](app.jpg)
 
 ## 小提示
 
-欢迎大家看看我的这个项目：[EchoTrace - 一个微信聊天记录导出与分析，年度报告应用](https://github.com/ycccccccy/echotrace)
+大家看看我的这个项目好不好❤️：[EchoTrace - 一个微信聊天记录导出与分析，年度报告应用](https://github.com/ycccccccy/echotrace)
 
 
 ## 支持版本
@@ -25,6 +25,7 @@ This project is a tool for obtaining WeChat database and decrypting WeChat cache
 现在理论支持所有4.x版本
 测试通过的版本：
 
+- 4.1.4.17
 - 4.1.4.15
 - 4.1.2.18
 - 4.1.2.17
