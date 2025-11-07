@@ -50,22 +50,37 @@ This project is a tool for obtaining WeChat database and decrypting WeChat cache
 
 ## 项目架构
 
+### 新架构概述（v2.0 起）
+
+自 v2.0 起，`wx_key` 使用“控制器 DLL + Flutter 轮询”方案：
+
+| 组件 | 作用 |
+| --- | --- |
+| 控制器 DLL（assets/dll/wx_key.dll） | 由 Flutter 进程加载，通过远程内存操作在 WeChat 中安装 Hook |
+| 共享缓冲区 + IPCManager | 传递密钥和状态数据 |
+| Flutter 轮询流 | 定期调用 `PollKeyData` / `GetStatusMessage`，刷新 UI 和日志 |
+
+
+
 ### 目录结构
 
 ```
 wx_key/
-├── lib/                              # Flutter 应用核心代码
-│   ├── main.dart                     # 应用入口及主界面
-│   ├── services/                     # 核心服务模块
-│   │   ├── dll_injector.dart         # DLL 注入服务
-│   │   ├── key_storage.dart          # 密钥存储管理
-│   │   ├── image_key_service.dart    # 图片密钥获取服务
-│   │   ├── log_reader.dart           # 日志读取服务
-│   │   └── app_logger.dart           # 应用日志管理
-│   └── widgets/                      # 自定义组件
-│       └── settings_dialog.dart      # 设置对话框
-├── dllmain.cpp                       # DLL 获取密钥的实现
-└── pubspec.yaml                      # Flutter 依赖配置
+├── lib/                                  # Flutter 前端
+│   ├── main.dart                         # UI 与状态管理
+│   ├── services/
+│   │   ├── remote_hook_controller.dart   # FFI 控制器，轮询 DLL
+│   │   ├── dll_injector.dart             # WeChat 启动/进程控制
+│   │   ├── key_storage.dart              # 密钥持久化
+│   │   ├── image_key_service.dart        # 图片密钥提取
+│   │   └── app_logger.dart / log_reader.dart
+│   └── widgets/                          # 自定义组件
+├── assets/dll/wx_key.dll                 # 控制器 DLL（随包分发）
+├── wx_key/                               # C++ 原生项目（Visual Studio）
+│   ├── include/                          # Hook、IPC、Shellcode 头文件
+│   ├── src/                              # hook_controller、remote_scanner 等实现
+│   └── wx_key.vcxproj                    # 工程配置
+└── build/windows/...                     # Flutter 构建产物
 ```
 
 ## 开发构建

@@ -3,7 +3,9 @@ import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
 import 'dart:io';
 import 'dart:async';
+import 'package:path/path.dart' as path;
 import 'services/dll_injector.dart';
+import 'services/remote_hook_controller.dart'; // 新增：远程Hook控制器
 import 'services/key_storage.dart';
 import 'services/log_reader.dart';
 import 'services/app_logger.dart';
@@ -31,139 +33,22 @@ void main() async {
   runApp(const MyApp());
 }
 
-/// 显示动画提示的全局方法
-void showAnimatedToast(
-  BuildContext context, {
-  required String message,
-  required Color backgroundColor,
-  required IconData icon,
-  Duration duration = const Duration(seconds: 3),
-}) {
-  final overlay = Overlay.of(context);
-  late OverlayEntry overlayEntry;
-  
-  // 创建动画控制器
-  final animationController = AnimationController(
-    duration: const Duration(milliseconds: 300),
-    vsync: overlay,
-  );
-
-  final scaleAnimation = Tween<double>(
-    begin: 0.8,
-    end: 1.0,
-  ).animate(CurvedAnimation(
-    parent: animationController,
-    curve: Curves.elasticOut,
-  ));
-
-  final opacityAnimation = Tween<double>(
-    begin: 0.0,
-    end: 1.0,
-  ).animate(CurvedAnimation(
-    parent: animationController,
-    curve: Curves.easeOut,
-  ));
-
-  final slideAnimation = Tween<Offset>(
-    begin: const Offset(0, 1),
-    end: Offset.zero,
-  ).animate(CurvedAnimation(
-    parent: animationController,
-    curve: Curves.easeOutBack,
-  ));
-
-  // 创建 overlay entry
-  overlayEntry = OverlayEntry(
-    builder: (context) => Positioned(
-      bottom: 60,
-      left: 0,
-      right: 0,
-      child: IgnorePointer(
-        child: Material(
-          color: Colors.transparent,
-          child: Center(
-            child: AnimatedBuilder(
-              animation: animationController,
-              builder: (context, child) {
-                return Transform.scale(
-                  scale: scaleAnimation.value,
-                  child: Opacity(
-                    opacity: opacityAnimation.value,
-                    child: SlideTransition(
-                      position: slideAnimation,
-                      child: Container(
-                        constraints: const BoxConstraints(
-                          maxWidth: 350,
-                          minWidth: 200,
-                        ),
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 20,
-                          vertical: 16,
-                        ),
-                        decoration: BoxDecoration(
-                          color: backgroundColor,
-                          borderRadius: BorderRadius.circular(16),
-                          boxShadow: [
-                            BoxShadow(
-                              color: backgroundColor.withOpacity(0.3),
-                              blurRadius: 20,
-                              offset: const Offset(0, -8),
-                            ),
-                          ],
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.all(8),
-                              decoration: BoxDecoration(
-                                color: Colors.white.withOpacity(0.2),
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: Icon(
-                                icon,
-                                color: Colors.white,
-                                size: 20,
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            Flexible(
-                              child: Text(
-                                message,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w600,
-                                  fontFamily: 'HarmonyOS_SansSC',
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                );
-              },
-            ),
-          ),
-        ),
-      ),
-    ),
-  );
-
-  // 插入 overlay
-  overlay.insert(overlayEntry);
-  
-  // 播放动画
-  animationController.forward();
-
-  // 自动隐藏
-  Future.delayed(duration, () async {
-    await animationController.reverse();
-    overlayEntry.remove();
-    animationController.dispose();
+class _StatusVisual {
+  const _StatusVisual({
+    required this.stateKey,
+    required this.background,
+    required this.border,
+    required this.iconColor,
+    required this.icon,
+    required this.shadow,
   });
+
+  final String stateKey;
+  final Color background;
+  final Color border;
+  final Color iconColor;
+  final IconData icon;
+  final Color shadow;
 }
 
 class MyApp extends StatelessWidget {
@@ -217,9 +102,11 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
   bool _isDllInjected = false;
   bool _isLoading = false;
   String _statusMessage = '未检测到微信进程';
+  String _statusLevel = 'INFO';
   
   // 新增状态变量
   String? _extractedKey;
+  String? _currentSessionKey;
   String? _savedKey;
   DateTime? _keyTimestamp;
   
@@ -239,6 +126,9 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
   // 控制状态轮询
   bool _isPolling = false;
   
+  // 超时定时器
+  Timer? _keyTimeoutTimer;
+  
   // 日志流订阅
   StreamSubscription<Map<String, dynamic>>? _logStreamSubscription;
 
@@ -257,6 +147,8 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
 
   @override
   void dispose() {
+    // 清理远程Hook控制器
+    RemoteHookController.dispose();
     windowManager.removeListener(this);
     super.dispose();
   }
@@ -283,6 +175,13 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
     // 停止状态轮询
     _isPolling = false;
     print('[清理] 状态轮询已停止');
+    
+    // 卸载远程Hook
+    if (_isDllInjected) {
+      print('[清理] 开始卸载远程Hook...');
+      RemoteHookController.uninstallHook();
+      print('[清理] 远程Hook已卸载');
+    }
     
     // 取消日志流订阅
     await _logStreamSubscription?.cancel();
@@ -330,14 +229,16 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
         setState(() {
           _wechatVersion = version;
           _statusMessage = '检测到微信版本: $version';
+          _statusLevel = 'INFO';
         });
         await AppLogger.success('检测到微信版本: $version');
       } else {
         setState(() {
           _statusMessage = '未找到微信安装目录';
+          _statusLevel = 'WARNING';
         });
+        _addLogMessage('WARNING', '未找到微信安装目录');
         await AppLogger.warning('未找到微信安装目录');
-        _showAnimatedToast('未找到微信安装目录', Colors.orange, Icons.warning);
         // 延迟打开设置页面让用户手动选择
         Future.delayed(const Duration(milliseconds: 500), () {
           if (mounted) {
@@ -375,61 +276,74 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
     }
   }
   
+  bool _isDuplicateLog(String type, String message) {
+    return _logMessages.any(
+      (log) => log['type'] == type && log['message'] == message,
+    );
+  }
+
   /// 添加日志消息
   void _addLogMessage(String type, String message) {
+    if (_isDuplicateLog(type, message)) {
+      return;
+    }
+
     setState(() {
       _logMessages.insert(0, {'type': type, 'message': message});
       if (_logMessages.length > _maxLogMessages) {
         _logMessages.removeLast();
       }
       
-      // 根据类型更新状态消息（但如果已经获取到密钥，保持"密钥获取成功"状态）
-      if ((type == 'INFO' || type == 'SUCCESS') && _extractedKey == null) {
+      final bool isInfoOrSuccess = type == 'INFO' || type == 'SUCCESS';
+      final bool isWarningOrError = type == 'WARNING' || type == 'ERROR';
+      final bool shouldUpdateInfoState = isInfoOrSuccess && _extractedKey == null;
+      if (shouldUpdateInfoState || isWarningOrError) {
         _statusMessage = message;
+        _statusLevel = type;
       }
     });
-    
-    // 显示重要消息的Toast
-    if (type == 'SUCCESS') {
-      _showAnimatedToast(message, Colors.green, Icons.check_circle);
-    } else if (type == 'ERROR') {
-      _showAnimatedToast(message, Colors.red, Icons.error);
-    } else if (type == 'WARNING') {
-      _showAnimatedToast(message, Colors.orange, Icons.warning);
-    }
   }
 
 
   /// 处理接收到的密钥
   Future<void> _onKeyReceived(String key) async {
     try {
-      await AppLogger.success('成功接收到密钥: ${key.substring(0, 8)}...');
+      if (_currentSessionKey == key) {
+        return; // 忽略会重复刷新的相同密钥
+      }
+      _currentSessionKey = key;
       
+      await AppLogger.success('成功接收到密钥: ${key.substring(0, 8)}...');
+      _keyTimeoutTimer?.cancel();
+      _addLogMessage('KEY', key);
       setState(() {
         _extractedKey = key;
+        _savedKey = key;
+        _keyTimestamp = DateTime.now();
+        _statusMessage = '密钥获取成功！';
+        _statusLevel = 'SUCCESS';
       });
+      _addLogMessage('SUCCESS', '密钥获取成功！');
 
-      // 自动保存密钥
-      final success = await KeyStorage.saveKey(key);
-      if (success) {
-        setState(() {
-          _savedKey = key;
-          _keyTimestamp = DateTime.now();
-          _statusMessage = '密钥获取成功！';
-        });
+      // 自动保存密钥（即便持久化失败也保持UI实时）
+      final saveSuccess = await KeyStorage.saveKey(key);
+      if (saveSuccess) {
         await AppLogger.success('密钥已自动保存');
-        _showAnimatedToast('密钥已自动保存', Colors.green, Icons.check_circle);
-        
-        // 密钥获取成功后，延迟停止日志监控以释放资源
-        Future.delayed(const Duration(seconds: 3), () async {
-          if (mounted) {
-            await _cleanupResources();
-          }
-        });
+        _addLogMessage('SUCCESS', '密钥已自动保存');
       } else {
         await AppLogger.error('密钥保存失败');
-        _showAnimatedToast('密钥保存失败', Colors.red, Icons.error);
+        _addLogMessage('ERROR', '密钥保存失败');
       }
+      
+      // 自动复制到剪贴板（只执行一次）
+      await _copyKeyToClipboard(key);
+      
+      // 密钥获取成功后，延迟停止日志监控以释放资源
+      Future.delayed(const Duration(seconds: 3), () async {
+        if (mounted) {
+          await _cleanupResources();
+        }
+      });
     } catch (e, stackTrace) {
       await AppLogger.error('处理接收到的密钥时出错', e, stackTrace);
     }
@@ -437,12 +351,16 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
 
   /// 启动密钥获取超时计时器
   void _startKeyTimeout() {
+    // 取消之前的定时器
+    _keyTimeoutTimer?.cancel();
+    
     // 60秒后如果还没有获取到密钥，停止监听
-    Future.delayed(const Duration(seconds: 60), () async {
+    _keyTimeoutTimer = Timer(const Duration(seconds: 60), () async {
       if (mounted && _extractedKey == null && _isDllInjected) {
         await _cleanupResources();
         setState(() {
           _statusMessage = '密钥获取超时，请重新尝试';
+          _statusLevel = 'WARNING';
           _isDllInjected = false;
         });
         _addLogMessage('WARNING', '密钥获取超时，请重新尝试');
@@ -461,6 +379,7 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
     // 清除之前的提取状态，允许重新提取
     setState(() {
       _extractedKey = null;
+      _currentSessionKey = null;
       _isStoppingListener = false;
     });
 
@@ -470,61 +389,23 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
     setState(() {
       _isLoading = true;
       _statusMessage = '准备开始自动注入...';
+      _statusLevel = 'INFO';
     });
     _addLogMessage('INFO', '准备开始自动注入...');
     await AppLogger.info('用户开始自动注入流程，微信版本: $_wechatVersion');
 
     try {
-      // 1. 下载DLL
-      _addLogMessage('INFO', '正在从GitHub下载DLL文件');
+      // 1. 准备内置DLL
+      _addLogMessage('INFO', '正在准备内置DLL文件');
       setState(() {
-        _statusMessage = '正在从GitHub下载DLL文件';
+        _statusMessage = '正在准备内置DLL文件';
+        _statusLevel = 'INFO';
       });
-      await AppLogger.info('开始下载通用DLL文件');
+      await AppLogger.info('开始准备内置DLL文件');
 
-      final downloadResult = await DllInjector.downloadDll(_wechatVersion ?? '');
-      if (!downloadResult.success) {
-        // 下载失败，根据错误类型处理
-        if (downloadResult.error == DllDownloadError.networkError) {
-          _addLogMessage('ERROR', '网络连接失败，无法下载DLL文件');
-          await AppLogger.error('网络连接失败: $_wechatVersion');
-          setState(() {
-            _isLoading = false;
-            _statusMessage = '网络连接失败';
-          });
-          // 停止日志监控并清理资源
-          await _cleanupResources();
-          // 显示网络错误弹窗，提供手动选择DLL选项
-          _showNetworkErrorDialog();
-          return;
-        } else if (downloadResult.error == DllDownloadError.versionNotFound) {
-          _addLogMessage('ERROR', 'DLL文件不存在');
-          await AppLogger.error('无法找到DLL文件: GitHub上没有wx_key.dll文件');
-          setState(() {
-            _isLoading = false;
-            _statusMessage = 'DLL文件不存在，请检查网络连接';
-          });
-          // 停止日志监控并清理资源
-          await _cleanupResources();
-          _showAnimatedToast('无法下载DLL文件，请重试', Colors.red, Icons.error);
-          return;
-        } else {
-          // 文件系统错误或其他错误
-          _addLogMessage('ERROR', 'DLL文件处理失败');
-          await AppLogger.error('DLL文件处理失败: $_wechatVersion');
-          setState(() {
-            _isLoading = false;
-            _statusMessage = 'DLL文件处理失败';
-          });
-          await _cleanupResources();
-          _showAnimatedToast('DLL文件处理失败，请重试', Colors.red, Icons.error);
-          return;
-        }
-      }
-
-      final dllPath = downloadResult.dllPath!;
-      _addLogMessage('SUCCESS', 'DLL下载成功');
-      await AppLogger.success('DLL文件下载成功: $dllPath');
+      // 提取DLL到临时目录以供新架构使用
+      final dllPath = await _extractDllToTemp();
+      _addLogMessage('SUCCESS', 'DLL已提取到临时目录');
 
       // 2. 检查微信是否运行，如果运行则请求用户确认关闭
       if (_isWechatRunning) {
@@ -542,7 +423,8 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
         if (!shouldClose) {
           _addLogMessage('WARNING', '用户取消操作');
           setState(() {
-            _statusMessage = '用户取消操作';
+          _statusMessage = '用户取消操作';
+          _statusLevel = 'WARNING';
           });
           // 用户取消，停止日志监控并清理资源
           await _cleanupResources();
@@ -551,7 +433,8 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
         
         setState(() {
           _isLoading = true;
-          _statusMessage = '正在关闭现有微信进程...';
+        _statusMessage = '正在关闭现有微信进程...';
+        _statusLevel = 'INFO';
         });
         _addLogMessage('INFO', '正在关闭现有微信进程...');
         
@@ -563,7 +446,8 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
       // 3. 启动微信
       _addLogMessage('INFO', '正在启动微信...');
       setState(() {
-        _statusMessage = '正在启动微信...';
+      _statusMessage = '正在启动微信...';
+      _statusLevel = 'INFO';
       });
 
       final launched = await DllInjector.launchWeChat();
@@ -572,12 +456,12 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
         await AppLogger.error('微信启动失败，可能原因：路径错误或微信未安装');
         setState(() {
           _isLoading = false;
-          _statusMessage = '微信启动失败';
+        _statusMessage = '微信启动失败';
+        _statusLevel = 'ERROR';
         });
         // 停止日志监控并清理资源
         await _cleanupResources();
         // 提示用户检查设置
-        _showAnimatedToast('微信启动失败，请在设置中检查微信路径', Colors.red, Icons.error);
         
         // 延迟后自动打开设置对话框
         Future.delayed(const Duration(milliseconds: 1500), () {
@@ -593,7 +477,8 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
       // 4. 等待微信窗口出现
       _addLogMessage('INFO', '等待微信窗口出现...');
       setState(() {
-        _statusMessage = '等待微信窗口出现...';
+      _statusMessage = '等待微信窗口出现...';
+      _statusLevel = 'INFO';
       });
 
       final windowAppeared = await DllInjector.waitForWeChatWindow(maxWaitSeconds: 15);
@@ -602,51 +487,111 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
         await AppLogger.error('等待微信窗口超时');
         setState(() {
           _isLoading = false;
-          _statusMessage = '等待微信窗口超时';
+        _statusMessage = '等待微信窗口超时';
+        _statusLevel = 'WARNING';
         });
         // 停止日志监控并清理资源
         await _cleanupResources();
-        _showAnimatedToast('微信窗口未出现，请手动启动微信后重试', Colors.orange, Icons.warning);
         return;
       }
 
       // 5. 延迟几秒，等待微信完全初始化
       _addLogMessage('INFO', '等待微信完全启动，请不要点击微信任何按键');
       setState(() {
-        _statusMessage = '等待微信完全启动...请不要点击微信任何按键';
+      _statusMessage = '等待微信完全启动...请不要点击微信任何按键';
+      _statusLevel = 'INFO';
       });
       for (int i = 5; i > 0; i--) {
         setState(() {
-          _statusMessage = '等待微信完全启动... ($i秒)，请不要点击微信任何按键';
+        _statusMessage = '等待微信完全启动... ($i秒)，请不要点击微信任何按键';
+        _statusLevel = 'INFO';
         });
         await Future.delayed(const Duration(seconds: 1));
       }
 
-      // 6. 注入DLL
-      _addLogMessage('INFO', '正在注入DLL...');
+      // 6. 初始化远程Hook控制器（新架构）
+      _addLogMessage('INFO', '正在初始化远程Hook控制器...');
       setState(() {
-        _statusMessage = '正在注入DLL...';
+      _statusMessage = '正在初始化远程Hook控制器...';
+      _statusLevel = 'INFO';
       });
 
-      final success = DllInjector.injectDll('Weixin.exe', dllPath);
+      // 初始化控制器DLL
+      if (!RemoteHookController.initialize(dllPath)) {
+        _addLogMessage('ERROR', 'DLL初始化失败');
+        await AppLogger.error('远程Hook控制器初始化失败');
+        setState(() {
+        _statusMessage = 'DLL初始化失败';
+        _statusLevel = 'ERROR';
+        });
+        await _cleanupResources();
+        return;
+      }
+
+      _addLogMessage('SUCCESS', 'DLL初始化成功');
+
+      // 7. 查找微信主进程PID
+      _addLogMessage('INFO', '正在查找微信主进程...');
+      final mainPid = DllInjector.findMainWeChatPid();
+      
+      if (mainPid == null) {
+        _addLogMessage('ERROR', '未找到微信主窗口进程');
+        await AppLogger.error('未找到微信主窗口进程');
+        setState(() {
+        _statusMessage = '未找到微信主窗口';
+        _statusLevel = 'ERROR';
+        });
+        RemoteHookController.dispose();
+        await _cleanupResources();
+        return;
+      }
+
+      _addLogMessage('INFO', '找到微信主进程 PID: $mainPid');
+
+      // 8. 安装远程Hook
+      _addLogMessage('INFO', '正在安装远程Hook...');
+      setState(() {
+      _statusMessage = '正在安装远程Hook...';
+      _statusLevel = 'INFO';
+      });
+
+      final success = RemoteHookController.installHook(
+        targetPid: mainPid,
+        onKeyReceived: (keyHex) async {
+          await _onKeyReceived(keyHex);
+        },
+        onStatus: (status, level) {
+          // 状态回调: level 0=info, 1=success, 2=error
+          final logType = level == 0 ? 'INFO' : (level == 1 ? 'SUCCESS' : 'ERROR');
+          _addLogMessage(logType, '[DLL] $status');
+          
+          setState(() {
+            _statusMessage = status;
+            _statusLevel = logType;
+          });
+        },
+      );
       
       if (success) {
-        _addLogMessage('SUCCESS', 'DLL注入成功！等待密钥获取...');
-        await AppLogger.success('DLL注入成功，开始等待密钥获取');
+        _addLogMessage('SUCCESS', '远程Hook安装成功！等待密钥获取...');
+        await AppLogger.success('远程Hook安装成功，开始等待密钥获取');
         setState(() {
-          _isDllInjected = true;
-          _statusMessage = 'DLL注入成功！等待密钥获取...';
+          _isDllInjected = true; // 复用这个状态变量
+          _statusMessage = 'Hook已安装！请登录微信...';
+          _statusLevel = 'SUCCESS';
         });
         
         // 设置超时，如果一段时间内没有收到密钥，则停止监听
         _startKeyTimeout();
       } else {
-        _addLogMessage('ERROR', 'DLL注入失败，请确保以管理员身份运行');
-        await AppLogger.error('DLL注入失败，可能未以管理员身份运行');
+        final error = RemoteHookController.getLastErrorMessage();
+        _addLogMessage('ERROR', 'Hook安装失败: $error');
+        await AppLogger.error('Hook安装失败: $error');
         setState(() {
-          _statusMessage = 'DLL注入失败';
+          _statusMessage = 'Hook安装失败';
+          _statusLevel = 'ERROR';
         });
-        // 停止日志监控并清理资源
+        RemoteHookController.dispose();
         await _cleanupResources();
       }
     } catch (e, stackTrace) {
@@ -654,6 +599,7 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
       await AppLogger.error('自动注入过程出错', e, stackTrace);
       setState(() {
         _statusMessage = '自动注入失败: $e';
+        _statusLevel = 'ERROR';
       });
       // 出错时停止日志监控并清理资源
       await _cleanupResources();
@@ -664,20 +610,81 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
     }
   }
 
+  /// 提取DLL到临时目录
+  Future<String> _extractDllToTemp() async {
+    try {
+      // 从assets加载DLL
+      final dllData = await rootBundle.load('assets/dll/wx_key.dll');
+      
+      // 保存到临时目录（使用唯一文件名避免被锁定）
+      final tempDir = Directory.systemTemp;
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      final dllPath = path.join(tempDir.path, 'wx_key_controller_$timestamp.dll');
+      final dllFile = File(dllPath);
+      
+      // 写入新文件
+      await dllFile.writeAsBytes(
+        dllData.buffer.asUint8List(),
+        flush: true,
+      );
+      
+      AppLogger.success('DLL已提取到: $dllPath');
+      
+      // 异步清理旧的DLL文件（不影响当前操作）
+      _cleanupOldDllFiles(tempDir);
+      
+      return dllPath;
+    } catch (e, stackTrace) {
+      AppLogger.error('提取DLL失败', e, stackTrace);
+      rethrow;
+    }
+  }
+
+  /// 清理旧的DLL文件
+  Future<void> _cleanupOldDllFiles(Directory tempDir) async {
+    try {
+      await for (final entity in tempDir.list()) {
+        if (entity is File) {
+          final fileName = path.basename(entity.path);
+          // 删除所有旧的 wx_key_controller_*.dll 文件
+          if (fileName.startsWith('wx_key_controller_') && fileName.endsWith('.dll')) {
+            try {
+              // 检查文件是否超过1小时未修改（避免删除正在使用的文件）
+              final stat = await entity.stat();
+              final age = DateTime.now().difference(stat.modified);
+              if (age.inHours >= 1) {
+                await entity.delete();
+                AppLogger.info('已清理旧DLL: $fileName');
+              }
+            } catch (e) {
+              // 忽略单个文件删除失败（可能仍在使用）
+            }
+          }
+        }
+      }
+    } catch (e) {
+      // 清理失败不影响主流程
+      AppLogger.warning('清理旧DLL文件失败: $e');
+    }
+  }
+
   /// 复制密钥到剪贴板
   Future<void> _copyKeyToClipboard(String key) async {
     try {
       await Clipboard.setData(ClipboardData(text: key));
-      _showAnimatedToast('密钥已复制到剪贴板', Colors.green, Icons.copy);
+      _addLogMessage('SUCCESS', '密钥已复制到剪贴板');
+      await AppLogger.success('密钥已复制到剪贴板');
     } catch (e) {
-      _showAnimatedToast('复制失败: $e', Colors.red, Icons.error);
+      _addLogMessage('ERROR', '复制失败: $e');
+      await AppLogger.error('复制密钥失败: $e');
     }
   }
 
   /// 获取图片密钥（XOR和AES）
   Future<void> _getImageKeys() async {
     if (!_isWechatRunning) {
-      _showAnimatedToast('请先启动微信', Colors.orange, Icons.warning);
+      _addLogMessage('WARNING', '请先启动微信');
+      await AppLogger.warning('请先启动微信后再获取图片密钥');
       return;
     }
 
@@ -720,7 +727,6 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
         if (selectedDirectory == null || selectedDirectory.isEmpty) {
           _addLogMessage('WARNING', '未选择目录');
           await AppLogger.info('用户未选择微信缓存目录');
-          _showAnimatedToast('未选择目录', Colors.orange, Icons.warning);
           setState(() {
             _isGettingImageKey = false;
           });
@@ -746,21 +752,17 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
           
           _addLogMessage('SUCCESS', '图片密钥获取成功');
           await AppLogger.success('图片密钥获取成功: XOR=0x${result.xorKey!.toRadixString(16).toUpperCase()}, AES=${result.aesKey}');
-          _showAnimatedToast('图片密钥获取成功', Colors.green, Icons.check_circle);
         } else {
           _addLogMessage('ERROR', '图片密钥保存失败');
           await AppLogger.error('图片密钥保存失败');
-          _showAnimatedToast('图片密钥保存失败', Colors.red, Icons.error);
         }
       } else {
         _addLogMessage('ERROR', result.error ?? '图片密钥获取失败');
         await AppLogger.error('图片密钥获取失败: ${result.error}');
-        _showAnimatedToast(result.error ?? '图片密钥获取失败', Colors.red, Icons.error);
       }
     } catch (e, stackTrace) {
       _addLogMessage('ERROR', '获取图片密钥时出错');
       await AppLogger.error('获取图片密钥时出错', e, stackTrace);
-      _showAnimatedToast('获取图片密钥时出错: $e', Colors.red, Icons.error);
     } finally {
       setState(() {
         _isGettingImageKey = false;
@@ -804,6 +806,7 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
               if (_extractedKey == null && mounted) {
                 setState(() {
                   _statusMessage = '微信已退出，未获取到密钥，请重新尝试';
+                  _statusLevel = 'WARNING';
                 });
                 _addLogMessage('WARNING', '微信已退出，未获取到密钥');
               }
@@ -821,27 +824,21 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
             } else {
               _statusMessage = '正在监听密钥，请前往微信登录即可获取密钥';
             }
+            _statusLevel = 'INFO';
           } else {
             _statusMessage = _wechatVersion != null 
-                ? '未检测到微信进程 (检测到版本: $_wechatVersion)'
+                ? '未检测到微信进程 (记录的版本: $_wechatVersion)'
                 : '未检测到微信进程';
+            _statusLevel = 'INFO';
           }
         }
+
       });
     }
   }
 
 
 
-
-  void _showAnimatedToast(String message, Color backgroundColor, IconData icon) {
-    showAnimatedToast(
-      context,
-      message: message,
-      backgroundColor: backgroundColor,
-      icon: icon,
-    );
-  }
 
   /// 显示确认对话框
   Future<bool> _showConfirmDialog({
@@ -930,116 +927,6 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
     return result ?? false;
   }
 
-  /// 显示网络错误弹窗
-  Future<void> _showNetworkErrorDialog() async {
-    await showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-          ),
-          title: Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: Colors.orange.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: const Icon(
-                  Icons.cloud_off_rounded,
-                  color: Colors.orange,
-                  size: 24,
-                ),
-              ),
-              const SizedBox(width: 12),
-              const Expanded(
-                child: Text(
-                  '网络连接失败',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w600,
-                    fontFamily: 'HarmonyOS_SansSC',
-                  ),
-                ),
-              ),
-            ],
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                '无法从 GitHub 下载 DLL 文件。',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontFamily: 'HarmonyOS_SansSC',
-                  height: 1.5,
-                ),
-              ),
-              const SizedBox(height: 8),
-              const Text(
-                '可能原因：\n• 网络连接不稳定\n• 无法访问 GitHub\n• 代理或防火墙设置',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontFamily: 'HarmonyOS_SansSC',
-                  height: 1.5,
-                ),
-              ),
-              const SizedBox(height: 8),
-              const Text(
-                '请检查网络连接后重试。',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontFamily: 'HarmonyOS_SansSC',
-                  height: 1.5,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: Text(
-                '取消',
-                style: TextStyle(
-                  color: Colors.grey.shade600,
-                  fontWeight: FontWeight.w500,
-                  fontFamily: 'HarmonyOS_SansSC',
-                ),
-              ),
-            ),
-            ElevatedButton.icon(
-              onPressed: () async {
-                Navigator.of(context).pop();
-                // 重试下载
-                await _autoInjectDll();
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF07c160),
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                elevation: 0,
-              ),
-              icon: const Icon(Icons.refresh, size: 18),
-              label: const Text(
-                '重试',
-                style: TextStyle(
-                  fontWeight: FontWeight.w600,
-                  fontFamily: 'HarmonyOS_SansSC',
-                ),
-              ),
-            ),
-          ],
-        );
-      },
-    );
-  }
 
   /// 打开设置对话框
   Future<void> _openSettings() async {
@@ -1053,6 +940,127 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
         },
       ),
     );
+  }
+
+  Widget _buildStatusBanner() {
+    final bool isLoading = _isLoading;
+    final _StatusVisual visual = _statusVisual(isLoading ? 'LOADING' : _statusLevel);
+    final bannerKey = '${visual.stateKey}_${_statusMessage}_${isLoading ? 1 : 0}';
+    
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 320),
+      curve: Curves.easeOutCubic,
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
+      decoration: BoxDecoration(
+        color: visual.background,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: visual.border),
+        boxShadow: [
+          BoxShadow(
+            color: visual.shadow,
+            blurRadius: isLoading ? 20 : 10,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 240),
+        switchInCurve: Curves.easeOut,
+        switchOutCurve: Curves.easeIn,
+        transitionBuilder: (child, animation) => FadeTransition(
+          opacity: animation,
+          child: SlideTransition(
+            position: Tween<Offset>(
+              begin: const Offset(0.02, 0.08),
+              end: Offset.zero,
+            ).animate(animation),
+            child: child,
+          ),
+        ),
+        child: Row(
+          key: ValueKey(bannerKey),
+          children: [
+            if (isLoading)
+              SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  valueColor: AlwaysStoppedAnimation<Color>(visual.iconColor),
+                ),
+              )
+            else
+              Icon(
+                visual.icon,
+                color: visual.iconColor,
+                size: 18,
+              ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Text(
+                _statusMessage,
+                style: TextStyle(
+                  fontSize: 14,
+                  color: Colors.grey.shade800,
+                  fontFamily: 'HarmonyOS_SansSC',
+                  height: 1.4,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  _StatusVisual _statusVisual(String level) {
+    switch (level) {
+      case 'SUCCESS':
+        return _StatusVisual(
+          stateKey: 'success',
+          background: const Color(0xFFE8F6EE),
+          border: const Color(0xFFCBEBD8),
+          iconColor: const Color(0xFF07C160),
+          icon: Icons.check_circle_rounded,
+          shadow: const Color(0xFF07C160).withOpacity(0.18),
+        );
+      case 'WARNING':
+        return _StatusVisual(
+          stateKey: 'warning',
+          background: const Color(0xFFFFF7E6),
+          border: const Color(0xFFFFE2A8),
+          iconColor: const Color(0xFFFFA000),
+          icon: Icons.warning_amber_rounded,
+          shadow: const Color(0xFFFFC107).withOpacity(0.18),
+        );
+      case 'ERROR':
+        return _StatusVisual(
+          stateKey: 'error',
+          background: const Color(0xFFFFEEF0),
+          border: const Color(0xFFF9C4C8),
+          iconColor: const Color(0xFFE53935),
+          icon: Icons.error_rounded,
+          shadow: const Color(0xFFE53935).withOpacity(0.18),
+        );
+      case 'LOADING':
+        return _StatusVisual(
+          stateKey: 'loading',
+          background: const Color(0xFFE9F0FF),
+          border: const Color(0xFFBFD3FF),
+          iconColor: const Color(0xFF3B82F6),
+          icon: Icons.more_horiz_rounded,
+          shadow: const Color(0xFF3B82F6).withOpacity(0.16),
+        );
+      default:
+        return _StatusVisual(
+          stateKey: 'info',
+          background: const Color(0xFFF4F6FB),
+          border: const Color(0xFFE1E6F5),
+          iconColor: const Color(0xFF4C6FFF),
+          icon: Icons.info_rounded,
+          shadow: const Color(0xFF4C6FFF).withOpacity(0.12),
+        );
+    }
   }
 
   Widget _buildSimpleActionButton() {
@@ -1542,48 +1550,7 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     // 当前状态
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
-                      decoration: BoxDecoration(
-                        color: Colors.grey.shade50,
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(
-                          color: Colors.grey.shade100,
-                          width: 1,
-                        ),
-                      ),
-                      child: Row(
-                        children: [
-                          if (_isLoading)
-                            SizedBox(
-                              width: 18,
-                              height: 18,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: const Color(0xFF07c160).withOpacity(0.8),
-                              ),
-                            )
-                          else
-                            Icon(
-                              _isDllInjected ? Icons.check_circle_rounded : Icons.circle_outlined,
-                              color: _isDllInjected ? const Color(0xFF07c160) : Colors.grey.shade400,
-                              size: 18,
-                            ),
-                          const SizedBox(width: 14),
-                          Expanded(
-                            child: Text(
-                              _statusMessage,
-                              style: TextStyle(
-                                fontSize: 14,
-                                color: Colors.grey.shade700,
-                                fontFamily: 'HarmonyOS_SansSC',
-                                height: 1.4,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
+                    _buildStatusBanner(),
                     const SizedBox(height: 20),
                     
                     // 操作按钮 - 未注入时显示，超时或失败时也会重新显示

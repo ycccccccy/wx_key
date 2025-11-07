@@ -43,3 +43,22 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# wx_key native (Visual Studio) project artifacts
+/wx_key/.vs/
+/wx_key/x64/
+/wx_key/wx_key/x64/
+/wx_key/wx_key/x86/
+/wx_key/wx_key/Debug/
+/wx_key/wx_key/Release/
+/wx_key/wx_key/ipch/
+/wx_key/wx_key/*.VC.db
+/wx_key/wx_key/*.VC.opendb
+/wx_key/wx_key/*.opendb
+/wx_key/wx_key/*.vsp
+/wx_key/wx_key/**/*.tlog/
+/wx_key/**/*.obj
+/wx_key/**/*.pdb
+/wx_key/**/*.ipdb
+/wx_key/**/*.iobj
+/wx_key/**/*.log
