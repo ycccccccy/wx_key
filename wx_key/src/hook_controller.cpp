@@ -55,12 +55,62 @@ namespace {
         LeaveCriticalSection(&g_dataLock);
     }
     
-    // 设置错误信息
+    std::string GetSystemErrorMessage(DWORD errorCode) {
+        if (errorCode == 0) {
+            return std::string();
+        }
+
+        LPSTR buffer = nullptr;
+        DWORD length = FormatMessageA(
+            FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+            nullptr,
+            errorCode,
+            MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+            reinterpret_cast<LPSTR>(&buffer),
+            0,
+            nullptr
+        );
+
+        std::string message;
+        if (length && buffer) {
+            message.assign(buffer, buffer + length);
+            while (!message.empty() && (message.back() == '\r' || message.back() == '\n')) {
+                message.pop_back();
+            }
+        }
+
+        if (buffer) {
+            LocalFree(buffer);
+        }
+        return message;
+    }
+
+    std::string FormatWin32Error(const std::string& baseMessage, DWORD errorCode) {
+        std::ostringstream oss;
+        oss << baseMessage;
+        if (errorCode != 0) {
+            oss << " (code " << errorCode << ")";
+            std::string detail = GetSystemErrorMessage(errorCode);
+            if (!detail.empty()) {
+                oss << ": " << detail;
+            }
+        }
+        return oss.str();
+    }
+
+    std::string FormatNtStatusError(const std::string& baseMessage, NTSTATUS status) {
+        std::ostringstream oss;
+        oss << baseMessage << " (NTSTATUS 0x"
+            << std::uppercase << std::hex << std::setw(8) << std::setfill('0')
+            << static_cast<unsigned long>(status) << ")";
+        return oss.str();
+    }
+
+    // ??????????
     void SetLastError(const std::string& error) {
         g_lastError = error;
         SendStatus(error, 2); // level 2 = error
     }
-    
     // 数据回调处理（从IPC线程调用）
     void OnDataReceived(const SharedKeyData& data) {
         // Validate data
@@ -106,7 +156,8 @@ HOOK_API bool InitializeHook(DWORD targetPid) {
     // 1. 初始化
     SendStatus("正在初始化系统调用...", 0);
     if (!IndirectSyscalls::Initialize()) {
-        SetLastError("初始化间接系统调用失败");
+        DWORD errorCode = GetLastError();
+        SetLastError(FormatWin32Error("?????????????????", errorCode));
         return false;
     }
     
@@ -132,7 +183,7 @@ HOOK_API bool InitializeHook(DWORD targetPid) {
     g_targetProcess = hProcess;
     
     if (status != STATUS_SUCCESS || !g_targetProcess) {
-        SetLastError("打开目标进程失败");
+        SetLastError(FormatNtStatusError("???????????", status));
         return false;
     }
     
@@ -213,7 +264,7 @@ HOOK_API bool InitializeHook(DWORD targetPid) {
     );
     
     if (allocStatus != STATUS_SUCCESS || !remoteDataBuffer) {
-        SetLastError("分配远程数据缓冲区失败");
+        SetLastError(FormatNtStatusError("???????????????????", allocStatus));
         CloseHandle(g_targetProcess);
         g_targetProcess = nullptr;
         IndirectSyscalls::Cleanup();
@@ -226,9 +277,10 @@ HOOK_API bool InitializeHook(DWORD targetPid) {
     g_ipcManager = std::make_unique<IPCManager>();
     
     if (!g_ipcManager->Initialize(uniqueId)) {
-        SetLastError("初始化IPC通信失败");
+        DWORD ipcError = GetLastError();
+        SetLastError(FormatWin32Error("?????IPC??????", ipcError));
         
-        // 清理远程缓冲区
+        // ????????????
         SIZE_T freeSize = 0;
         IndirectSyscalls::NtFreeVirtualMemory(
             g_targetProcess,
@@ -248,11 +300,12 @@ HOOK_API bool InitializeHook(DWORD targetPid) {
     g_ipcManager->SetDataCallback(OnDataReceived);
     
     if (!g_ipcManager->StartListening()) {
-        SetLastError("启动IPC监听失败");
+        DWORD ipcError = GetLastError();
+        SetLastError(FormatWin32Error("????IPC???????", ipcError));
         g_ipcManager->Cleanup();
         g_ipcManager.reset();
         
-        // 清理远程缓冲区
+        // ????????????
         SIZE_T freeSize = 0;
         IndirectSyscalls::NtFreeVirtualMemory(
             g_targetProcess,
@@ -279,7 +332,8 @@ HOOK_API bool InitializeHook(DWORD targetPid) {
     // 10. 安装hook
     SendStatus("正在安装远程Hook...", 0);
     if (!g_remoteHooker->InstallHook(targetFunctionAddress, shellcodeConfig)) {
-        SetLastError("安装Hook失败");
+        DWORD hookError = GetLastError();
+        SetLastError(FormatWin32Error("???Hook???", hookError));
         g_ipcManager->StopListening();
         g_ipcManager->Cleanup();
         g_ipcManager.reset();

@@ -38,58 +38,88 @@ bool IPCManager::Initialize(const std::string& uniqueId) {
         baseEventName.replace(pos, 6, uniqueId);
     }
     
-    sharedMemoryName = baseMemName;
-    eventName = baseEventName;
+    auto tryCreateResources = [&](const std::string& memName, const std::string& evtName) -> bool {
+        HANDLE mapHandle = CreateFileMappingA(
+            INVALID_HANDLE_VALUE,
+            nullptr,
+            PAGE_READWRITE,
+            0,
+            sizeof(SharedKeyData),
+            memName.c_str()
+        );
+        
+        if (mapHandle == nullptr) {
+            return false;
+        }
+        
+        PVOID sharedView = MapViewOfFile(
+            mapHandle,
+            FILE_MAP_ALL_ACCESS,
+            0,
+            0,
+            sizeof(SharedKeyData)
+        );
+        
+        if (sharedView == nullptr) {
+            DWORD err = GetLastError();
+            CloseHandle(mapHandle);
+            SetLastError(err);
+            return false;
+        }
+        
+        ZeroMemory(sharedView, sizeof(SharedKeyData));
+        
+        // 创建事件对象（手动重置）
+        HANDLE eventHandle = CreateEventA(
+            nullptr,
+            TRUE,  // 手动重置
+            FALSE, // 初始状态非信号
+            evtName.c_str()
+        );
+        
+        if (eventHandle == nullptr) {
+            DWORD err = GetLastError();
+            UnmapViewOfFile(sharedView);
+            CloseHandle(mapHandle);
+            SetLastError(err);
+            return false;
+        }
+        
+        hMapFile = mapHandle;
+        hEvent = eventHandle;
+        pSharedMemory = sharedView;
+        sharedMemoryName = memName;
+        eventName = evtName;
+        return true;
+    };
     
-    // 创建共享内存
-    hMapFile = CreateFileMappingA(
-        INVALID_HANDLE_VALUE,
-        nullptr,
-        PAGE_READWRITE,
-        0,
-        sizeof(SharedKeyData),
-        sharedMemoryName.c_str()
-    );
+    auto convertGlobalToLocal = [](const std::string& name) -> std::string {
+        const std::string globalPrefix = "Global\\";
+        if (name.rfind(globalPrefix, 0) == 0) {
+            return std::string("Local\\") + name.substr(globalPrefix.length());
+        }
+        return name;
+    };
     
-    if (hMapFile == nullptr) {
-        return false;
+    if (tryCreateResources(baseMemName, baseEventName)) {
+        return true;
     }
     
-    // 映射共享内存
-    pSharedMemory = MapViewOfFile(
-        hMapFile,
-        FILE_MAP_ALL_ACCESS,
-        0,
-        0,
-        sizeof(SharedKeyData)
-    );
+    DWORD firstError = GetLastError();
+    bool needsFallback = (firstError == ERROR_ACCESS_DENIED || firstError == ERROR_PRIVILEGE_NOT_HELD);
     
-    if (pSharedMemory == nullptr) {
-        CloseHandle(hMapFile);
-        hMapFile = nullptr;
-        return false;
+    if (needsFallback) {
+        std::string localMemName = convertGlobalToLocal(baseMemName);
+        std::string localEventName = convertGlobalToLocal(baseEventName);
+        
+        if ((localMemName != baseMemName || localEventName != baseEventName) &&
+            tryCreateResources(localMemName, localEventName)) {
+            return true;
+        }
     }
     
-    // 初始化共享内存
-    ZeroMemory(pSharedMemory, sizeof(SharedKeyData));
-    
-    // 创建事件对象（手动重置）
-    hEvent = CreateEventA(
-        nullptr,
-        TRUE,  // 手动重置
-        FALSE, // 初始状态非信号
-        eventName.c_str()
-    );
-    
-    if (hEvent == nullptr) {
-        UnmapViewOfFile(pSharedMemory);
-        CloseHandle(hMapFile);
-        pSharedMemory = nullptr;
-        hMapFile = nullptr;
-        return false;
-    }
-    
-    return true;
+    SetLastError(firstError);
+    return false;
 }
 
 void IPCManager::SetRemoteBuffer(HANDLE hProcess, PVOID remoteBufferAddr) {
