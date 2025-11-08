@@ -22,13 +22,16 @@ This project is a tool for obtaining WeChat database and decrypting WeChat cache
 
 ## 支持版本
 
-现在理论支持所有4.x版本
-测试通过的版本：
+支持所有4.x版本
 
+仅在以下版本测试：
 - 4.1.4.17
 - 4.1.4.15
 - 4.1.2.18
 - 4.1.2.17
+- 4.1.0.30
+- 4.0.5.17
+
 
 
 ## 快速开始

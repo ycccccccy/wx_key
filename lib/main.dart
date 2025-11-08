@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
 import 'dart:io';
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:path/path.dart' as path;
 import 'services/dll_injector.dart';
 import 'services/remote_hook_controller.dart'; // 新增：远程Hook控制器
@@ -15,21 +16,21 @@ import 'widgets/settings_dialog.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await windowManager.ensureInitialized();
-  
+
   // 初始化应用日志
   await AppLogger.init();
-  
+
   // 设置窗口选项，防止默认关闭行为
   WindowOptions windowOptions = const WindowOptions(
     center: true,
     skipTaskbar: false,
   );
-  
+
   windowManager.waitUntilReadyToShow(windowOptions, () async {
     await windowManager.show();
     await windowManager.focus();
   });
-  
+
   runApp(const MyApp());
 }
 
@@ -51,6 +52,125 @@ class _StatusVisual {
   final Color shadow;
 }
 
+class _CircularArrowIndicatorPainter extends CustomPainter {
+  const _CircularArrowIndicatorPainter({
+    required this.progress,
+    required this.color,
+    required this.emphasize,
+  });
+
+  final double progress;
+  final Color color;
+  final bool emphasize;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final double diameter = size.shortestSide;
+    final double radius = diameter / 2;
+    final Offset center = Offset(size.width / 2, size.height / 2);
+
+    final Paint fillPaint = Paint()
+      ..shader = RadialGradient(
+        colors: [
+          color.withOpacity(emphasize ? 0.32 : 0.24),
+          color.withOpacity(emphasize ? 0.12 : 0.08),
+        ],
+      ).createShader(Rect.fromCircle(center: center, radius: radius));
+    canvas.drawCircle(center, radius, fillPaint);
+
+    final Paint borderPaint = Paint()
+      ..color = color.withOpacity(0.35)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = emphasize ? 2.2 : 1.8;
+    canvas.drawCircle(
+      center,
+      radius - borderPaint.strokeWidth / 2,
+      borderPaint,
+    );
+
+    final double innerRadius = radius - 4;
+    final double arrowHeight = diameter * (emphasize ? 0.6 : 0.54);
+    final double arrowWidth = diameter * (emphasize ? 0.46 : 0.4);
+    final double travel = innerRadius * 2 + arrowHeight * 1.6;
+    final double baseLine =
+        center.dy + innerRadius + arrowHeight + 6; // fully below the circle
+
+    canvas.save();
+    canvas.clipPath(
+      Path()..addOval(Rect.fromCircle(center: center, radius: innerRadius)),
+    );
+
+    for (int i = 0; i < 2; i++) {
+      final double phase = (progress + i * 0.5) % 1.0;
+      final double eased = Curves.easeInOut.transform(phase);
+      final double topY = baseLine - eased * travel - arrowHeight;
+      final double opacity = (1 - eased).clamp(0.0, 1.0);
+      _drawArrow(
+        canvas,
+        center.dx,
+        topY,
+        arrowWidth,
+        arrowHeight,
+        color,
+        opacity,
+      );
+    }
+
+    canvas.restore();
+  }
+
+  void _drawArrow(
+    Canvas canvas,
+    double centerX,
+    double topY,
+    double width,
+    double height,
+    Color color,
+    double opacity,
+  ) {
+    final double headHeight = height * 0.36;
+    final double bodyWidth = width * 0.42;
+    final double baseY = topY + height;
+
+    final Path arrow = Path()
+      ..moveTo(centerX, topY)
+      ..lineTo(centerX - width / 2, topY + headHeight)
+      ..lineTo(centerX - bodyWidth / 2, topY + headHeight)
+      ..lineTo(centerX - bodyWidth / 2, baseY)
+      ..lineTo(centerX + bodyWidth / 2, baseY)
+      ..lineTo(centerX + bodyWidth / 2, topY + headHeight)
+      ..lineTo(centerX + width / 2, topY + headHeight)
+      ..close();
+
+    final Rect gradientRect = Rect.fromLTWH(
+      centerX - width / 2,
+      topY,
+      width,
+      height,
+    );
+
+    final Paint arrowPaint = Paint()
+      ..shader = LinearGradient(
+        colors: [
+          color.withOpacity(0.9 * opacity),
+          color.withOpacity(0.5 * opacity),
+        ],
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+      ).createShader(gradientRect);
+
+    canvas.drawShadow(arrow, color.withOpacity(0.25 * opacity), 6, false);
+    canvas.drawPath(arrow, arrowPaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _CircularArrowIndicatorPainter oldDelegate) {
+    return oldDelegate.progress != progress ||
+        oldDelegate.color != color ||
+        oldDelegate.emphasize != emphasize;
+  }
+}
+
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
@@ -60,27 +180,72 @@ class MyApp extends StatelessWidget {
       title: '微信密钥提取工具',
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF07c160), 
+          seedColor: const Color(0xFF07c160),
           brightness: Brightness.light,
         ),
         useMaterial3: true,
         fontFamily: 'HarmonyOS_SansSC',
         textTheme: const TextTheme(
-          displayLarge: TextStyle(fontFamily: 'HarmonyOS_SansSC', fontWeight: FontWeight.w700),
-          displayMedium: TextStyle(fontFamily: 'HarmonyOS_SansSC', fontWeight: FontWeight.w600),
-          displaySmall: TextStyle(fontFamily: 'HarmonyOS_SansSC', fontWeight: FontWeight.w500),
-          headlineLarge: TextStyle(fontFamily: 'HarmonyOS_SansSC', fontWeight: FontWeight.w600),
-          headlineMedium: TextStyle(fontFamily: 'HarmonyOS_SansSC', fontWeight: FontWeight.w500),
-          headlineSmall: TextStyle(fontFamily: 'HarmonyOS_SansSC', fontWeight: FontWeight.w500),
-          titleLarge: TextStyle(fontFamily: 'HarmonyOS_SansSC', fontWeight: FontWeight.w600),
-          titleMedium: TextStyle(fontFamily: 'HarmonyOS_SansSC', fontWeight: FontWeight.w500),
-          titleSmall: TextStyle(fontFamily: 'HarmonyOS_SansSC', fontWeight: FontWeight.w500),
-          bodyLarge: TextStyle(fontFamily: 'HarmonyOS_SansSC', fontWeight: FontWeight.w400),
-          bodyMedium: TextStyle(fontFamily: 'HarmonyOS_SansSC', fontWeight: FontWeight.w400),
-          bodySmall: TextStyle(fontFamily: 'HarmonyOS_SansSC', fontWeight: FontWeight.w400),
-          labelLarge: TextStyle(fontFamily: 'HarmonyOS_SansSC', fontWeight: FontWeight.w500),
-          labelMedium: TextStyle(fontFamily: 'HarmonyOS_SansSC', fontWeight: FontWeight.w500),
-          labelSmall: TextStyle(fontFamily: 'HarmonyOS_SansSC', fontWeight: FontWeight.w500),
+          displayLarge: TextStyle(
+            fontFamily: 'HarmonyOS_SansSC',
+            fontWeight: FontWeight.w700,
+          ),
+          displayMedium: TextStyle(
+            fontFamily: 'HarmonyOS_SansSC',
+            fontWeight: FontWeight.w600,
+          ),
+          displaySmall: TextStyle(
+            fontFamily: 'HarmonyOS_SansSC',
+            fontWeight: FontWeight.w500,
+          ),
+          headlineLarge: TextStyle(
+            fontFamily: 'HarmonyOS_SansSC',
+            fontWeight: FontWeight.w600,
+          ),
+          headlineMedium: TextStyle(
+            fontFamily: 'HarmonyOS_SansSC',
+            fontWeight: FontWeight.w500,
+          ),
+          headlineSmall: TextStyle(
+            fontFamily: 'HarmonyOS_SansSC',
+            fontWeight: FontWeight.w500,
+          ),
+          titleLarge: TextStyle(
+            fontFamily: 'HarmonyOS_SansSC',
+            fontWeight: FontWeight.w600,
+          ),
+          titleMedium: TextStyle(
+            fontFamily: 'HarmonyOS_SansSC',
+            fontWeight: FontWeight.w500,
+          ),
+          titleSmall: TextStyle(
+            fontFamily: 'HarmonyOS_SansSC',
+            fontWeight: FontWeight.w500,
+          ),
+          bodyLarge: TextStyle(
+            fontFamily: 'HarmonyOS_SansSC',
+            fontWeight: FontWeight.w400,
+          ),
+          bodyMedium: TextStyle(
+            fontFamily: 'HarmonyOS_SansSC',
+            fontWeight: FontWeight.w400,
+          ),
+          bodySmall: TextStyle(
+            fontFamily: 'HarmonyOS_SansSC',
+            fontWeight: FontWeight.w400,
+          ),
+          labelLarge: TextStyle(
+            fontFamily: 'HarmonyOS_SansSC',
+            fontWeight: FontWeight.w500,
+          ),
+          labelMedium: TextStyle(
+            fontFamily: 'HarmonyOS_SansSC',
+            fontWeight: FontWeight.w500,
+          ),
+          labelSmall: TextStyle(
+            fontFamily: 'HarmonyOS_SansSC',
+            fontWeight: FontWeight.w500,
+          ),
         ),
       ),
       home: const MyHomePage(title: '微信密钥提取工具'),
@@ -97,44 +262,51 @@ class MyHomePage extends StatefulWidget {
   State<MyHomePage> createState() => _MyHomePageState();
 }
 
-class _MyHomePageState extends State<MyHomePage> with WindowListener {
+class _MyHomePageState extends State<MyHomePage>
+    with WindowListener, SingleTickerProviderStateMixin {
   bool _isWechatRunning = false;
   bool _isDllInjected = false;
   bool _isLoading = false;
   String _statusMessage = '未检测到微信进程';
   String _statusLevel = 'INFO';
-  
+
   // 新增状态变量
   String? _extractedKey;
   String? _currentSessionKey;
   String? _savedKey;
   DateTime? _keyTimestamp;
-  
+
   // 图片密钥相关
   int? _imageXorKey;
   String? _imageAesKey;
   DateTime? _imageKeyTimestamp;
   bool _isGettingImageKey = false;
-  
+
   // 版本和DLL相关
   String? _wechatVersion;
-  
+
   // 日志相关
   final List<Map<String, String>> _logMessages = [];
   final int _maxLogMessages = 10;
-  
+
   // 控制状态轮询
   bool _isPolling = false;
-  
+
+  late final AnimationController _statusBackdropController;
+
   // 超时定时器
   Timer? _keyTimeoutTimer;
-  
+
   // 日志流订阅
   StreamSubscription<Map<String, dynamic>>? _logStreamSubscription;
 
   @override
   void initState() {
     super.initState();
+    _statusBackdropController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 2600),
+    )..repeat();
     windowManager.addListener(this);
     // 防止默认关闭行为，让我们可以自定义关闭逻辑
     windowManager.setPreventClose(true);
@@ -147,6 +319,7 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
 
   @override
   void dispose() {
+    _statusBackdropController.dispose();
     // 清理远程Hook控制器
     RemoteHookController.dispose();
     windowManager.removeListener(this);
@@ -171,23 +344,23 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
   /// 清理所有资源
   Future<void> _cleanupResources() async {
     print('[清理] 开始清理资源...');
-    
+
     // 停止状态轮询
     _isPolling = false;
     print('[清理] 状态轮询已停止');
-    
+
     // 卸载远程Hook
     if (_isDllInjected) {
       print('[清理] 开始卸载远程Hook...');
       RemoteHookController.uninstallHook();
       print('[清理] 远程Hook已卸载');
     }
-    
+
     // 取消日志流订阅
     await _logStreamSubscription?.cancel();
     _logStreamSubscription = null;
     print('[清理] 日志流订阅已取消');
-    
+
     // 等待一小段时间确保完全退出
     await Future.delayed(const Duration(milliseconds: 300));
     print('[清理] 资源清理完成');
@@ -205,7 +378,7 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
         });
         await AppLogger.info('成功加载已保存的数据库密钥信息');
       }
-      
+
       // 加载保存的图片密钥信息
       final imageKeyInfo = await KeyStorage.getImageKeyInfo();
       if (imageKeyInfo != null) {
@@ -257,7 +430,7 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
       // 清空日志文件
       await LogReader.clearLog();
       await AppLogger.info('已清空DLL日志文件，开始监控');
-      
+
       // 创建日志轮询流并监听
       _logStreamSubscription = LogReader.createPollingStream().listen((event) {
         if (event['type'] == 'key') {
@@ -269,13 +442,12 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
           _addLogMessage(logData['type']!, logData['message']!);
         }
       });
-      
     } catch (e, stackTrace) {
       await AppLogger.error('启动日志监控失败', e, stackTrace);
       print('[日志监控] 启动失败: $e');
     }
   }
-  
+
   bool _isDuplicateLog(String type, String message) {
     return _logMessages.any(
       (log) => log['type'] == type && log['message'] == message,
@@ -293,17 +465,17 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
       if (_logMessages.length > _maxLogMessages) {
         _logMessages.removeLast();
       }
-      
+
       final bool isInfoOrSuccess = type == 'INFO' || type == 'SUCCESS';
       final bool isWarningOrError = type == 'WARNING' || type == 'ERROR';
-      final bool shouldUpdateInfoState = isInfoOrSuccess && _extractedKey == null;
+      final bool shouldUpdateInfoState =
+          isInfoOrSuccess && _extractedKey == null;
       if (shouldUpdateInfoState || isWarningOrError) {
         _statusMessage = message;
         _statusLevel = type;
       }
     });
   }
-
 
   /// 处理接收到的密钥
   Future<void> _onKeyReceived(String key) async {
@@ -312,7 +484,7 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
         return; // 忽略会重复刷新的相同密钥
       }
       _currentSessionKey = key;
-      
+
       await AppLogger.success('成功接收到密钥: ${key.substring(0, 8)}...');
       _keyTimeoutTimer?.cancel();
       _addLogMessage('KEY', key);
@@ -334,10 +506,10 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
         await AppLogger.error('密钥保存失败');
         _addLogMessage('ERROR', '密钥保存失败');
       }
-      
+
       // 自动复制到剪贴板（只执行一次）
       await _copyKeyToClipboard(key);
-      
+
       // 密钥获取成功后，延迟停止日志监控以释放资源
       Future.delayed(const Duration(seconds: 3), () async {
         if (mounted) {
@@ -353,7 +525,7 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
   void _startKeyTimeout() {
     // 取消之前的定时器
     _keyTimeoutTimer?.cancel();
-    
+
     // 60秒后如果还没有获取到密钥，停止监听
     _keyTimeoutTimer = Timer(const Duration(seconds: 60), () async {
       if (mounted && _extractedKey == null && _isDllInjected) {
@@ -412,32 +584,32 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
         setState(() {
           _isLoading = false;
         });
-        
+
         final shouldClose = await _showConfirmDialog(
           title: '确认关闭微信',
           content: '检测到微信正在运行，需要重启微信才能注入DLL。\n是否关闭当前微信？',
           confirmText: '关闭并继续',
           cancelText: '取消',
         );
-        
+
         if (!shouldClose) {
           _addLogMessage('WARNING', '用户取消操作');
           setState(() {
-          _statusMessage = '用户取消操作';
-          _statusLevel = 'WARNING';
+            _statusMessage = '用户取消操作';
+            _statusLevel = 'WARNING';
           });
           // 用户取消，停止日志监控并清理资源
           await _cleanupResources();
           return;
         }
-        
+
         setState(() {
           _isLoading = true;
-        _statusMessage = '正在关闭现有微信进程...';
-        _statusLevel = 'INFO';
+          _statusMessage = '正在关闭现有微信进程...';
+          _statusLevel = 'INFO';
         });
         _addLogMessage('INFO', '正在关闭现有微信进程...');
-        
+
         DllInjector.killWeChatProcesses();
         await Future.delayed(const Duration(seconds: 2));
         _addLogMessage('SUCCESS', '已关闭现有微信进程');
@@ -446,8 +618,8 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
       // 3. 启动微信
       _addLogMessage('INFO', '正在启动微信...');
       setState(() {
-      _statusMessage = '正在启动微信...';
-      _statusLevel = 'INFO';
+        _statusMessage = '正在启动微信...';
+        _statusLevel = 'INFO';
       });
 
       final launched = await DllInjector.launchWeChat();
@@ -456,13 +628,13 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
         await AppLogger.error('微信启动失败，可能原因：路径错误或微信未安装');
         setState(() {
           _isLoading = false;
-        _statusMessage = '微信启动失败';
-        _statusLevel = 'ERROR';
+          _statusMessage = '微信启动失败';
+          _statusLevel = 'ERROR';
         });
         // 停止日志监控并清理资源
         await _cleanupResources();
         // 提示用户检查设置
-        
+
         // 延迟后自动打开设置对话框
         Future.delayed(const Duration(milliseconds: 1500), () {
           if (mounted) {
@@ -477,18 +649,20 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
       // 4. 等待微信窗口出现
       _addLogMessage('INFO', '等待微信窗口出现...');
       setState(() {
-      _statusMessage = '等待微信窗口出现...';
-      _statusLevel = 'INFO';
+        _statusMessage = '等待微信窗口出现...';
+        _statusLevel = 'INFO';
       });
 
-      final windowAppeared = await DllInjector.waitForWeChatWindow(maxWaitSeconds: 15);
+      final windowAppeared = await DllInjector.waitForWeChatWindow(
+        maxWaitSeconds: 15,
+      );
       if (!windowAppeared) {
         _addLogMessage('ERROR', '等待微信窗口超时，微信可能启动失败');
         await AppLogger.error('等待微信窗口超时');
         setState(() {
           _isLoading = false;
-        _statusMessage = '等待微信窗口超时';
-        _statusLevel = 'WARNING';
+          _statusMessage = '等待微信窗口超时';
+          _statusLevel = 'WARNING';
         });
         // 停止日志监控并清理资源
         await _cleanupResources();
@@ -498,13 +672,13 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
       // 5. 延迟几秒，等待微信完全初始化
       _addLogMessage('INFO', '等待微信完全启动，请不要点击微信任何按键');
       setState(() {
-      _statusMessage = '等待微信完全启动...请不要点击微信任何按键';
-      _statusLevel = 'INFO';
+        _statusMessage = '等待微信完全启动...请不要点击微信任何按键';
+        _statusLevel = 'INFO';
       });
       for (int i = 5; i > 0; i--) {
         setState(() {
-        _statusMessage = '等待微信完全启动... ($i秒)，请不要点击微信任何按键';
-        _statusLevel = 'INFO';
+          _statusMessage = '等待微信完全启动... ($i秒)，请不要点击微信任何按键';
+          _statusLevel = 'INFO';
         });
         await Future.delayed(const Duration(seconds: 1));
       }
@@ -512,8 +686,8 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
       // 6. 初始化远程Hook控制器（新架构）
       _addLogMessage('INFO', '正在初始化远程Hook控制器...');
       setState(() {
-      _statusMessage = '正在初始化远程Hook控制器...';
-      _statusLevel = 'INFO';
+        _statusMessage = '正在初始化远程Hook控制器...';
+        _statusLevel = 'INFO';
       });
 
       // 初始化控制器DLL
@@ -521,8 +695,8 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
         _addLogMessage('ERROR', 'DLL初始化失败');
         await AppLogger.error('远程Hook控制器初始化失败');
         setState(() {
-        _statusMessage = 'DLL初始化失败';
-        _statusLevel = 'ERROR';
+          _statusMessage = 'DLL初始化失败';
+          _statusLevel = 'ERROR';
         });
         await _cleanupResources();
         return;
@@ -533,13 +707,13 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
       // 7. 查找微信主进程PID
       _addLogMessage('INFO', '正在查找微信主进程...');
       final mainPid = DllInjector.findMainWeChatPid();
-      
+
       if (mainPid == null) {
         _addLogMessage('ERROR', '未找到微信主窗口进程');
         await AppLogger.error('未找到微信主窗口进程');
         setState(() {
-        _statusMessage = '未找到微信主窗口';
-        _statusLevel = 'ERROR';
+          _statusMessage = '未找到微信主窗口';
+          _statusLevel = 'ERROR';
         });
         RemoteHookController.dispose();
         await _cleanupResources();
@@ -551,8 +725,8 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
       // 8. 安装远程Hook
       _addLogMessage('INFO', '正在安装远程Hook...');
       setState(() {
-      _statusMessage = '正在安装远程Hook...';
-      _statusLevel = 'INFO';
+        _statusMessage = '正在安装远程Hook...';
+        _statusLevel = 'INFO';
       });
 
       final success = RemoteHookController.installHook(
@@ -562,16 +736,18 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
         },
         onStatus: (status, level) {
           // 状态回调: level 0=info, 1=success, 2=error
-          final logType = level == 0 ? 'INFO' : (level == 1 ? 'SUCCESS' : 'ERROR');
+          final logType = level == 0
+              ? 'INFO'
+              : (level == 1 ? 'SUCCESS' : 'ERROR');
           _addLogMessage(logType, '[DLL] $status');
-          
+
           setState(() {
             _statusMessage = status;
             _statusLevel = logType;
           });
         },
       );
-      
+
       if (success) {
         _addLogMessage('SUCCESS', '远程Hook安装成功！等待密钥获取...');
         await AppLogger.success('远程Hook安装成功，开始等待密钥获取');
@@ -580,7 +756,7 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
           _statusMessage = 'Hook已安装！请登录微信...';
           _statusLevel = 'SUCCESS';
         });
-        
+
         // 设置超时，如果一段时间内没有收到密钥，则停止监听
         _startKeyTimeout();
       } else {
@@ -615,24 +791,24 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
     try {
       // 从assets加载DLL
       final dllData = await rootBundle.load('assets/dll/wx_key.dll');
-      
+
       // 保存到临时目录（使用唯一文件名避免被锁定）
       final tempDir = Directory.systemTemp;
       final timestamp = DateTime.now().millisecondsSinceEpoch;
-      final dllPath = path.join(tempDir.path, 'wx_key_controller_$timestamp.dll');
-      final dllFile = File(dllPath);
-      
-      // 写入新文件
-      await dllFile.writeAsBytes(
-        dllData.buffer.asUint8List(),
-        flush: true,
+      final dllPath = path.join(
+        tempDir.path,
+        'wx_key_controller_$timestamp.dll',
       );
-      
+      final dllFile = File(dllPath);
+
+      // 写入新文件
+      await dllFile.writeAsBytes(dllData.buffer.asUint8List(), flush: true);
+
       AppLogger.success('DLL已提取到: $dllPath');
-      
+
       // 异步清理旧的DLL文件（不影响当前操作）
       _cleanupOldDllFiles(tempDir);
-      
+
       return dllPath;
     } catch (e, stackTrace) {
       AppLogger.error('提取DLL失败', e, stackTrace);
@@ -647,7 +823,8 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
         if (entity is File) {
           final fileName = path.basename(entity.path);
           // 删除所有旧的 wx_key_controller_*.dll 文件
-          if (fileName.startsWith('wx_key_controller_') && fileName.endsWith('.dll')) {
+          if (fileName.startsWith('wx_key_controller_') &&
+              fileName.endsWith('.dll')) {
             try {
               // 检查文件是否超过1小时未修改（避免删除正在使用的文件）
               final stat = await entity.stat();
@@ -703,15 +880,16 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
       if (!result.success && result.needManualSelection) {
         _addLogMessage('WARNING', '未找到微信缓存目录，请手动选择');
         await AppLogger.warning('未找到微信缓存目录，请求用户手动选择');
-        
+
         // 显示确认对话框
         final shouldSelectManually = await _showConfirmDialog(
           title: '未找到缓存目录',
-          content: '无法自动找到微信缓存目录。\n\n通常位于：\nDocuments\\xwechat_files\\你的账号ID\n\n是否手动选择目录？',
+          content:
+              '无法自动找到微信缓存目录。\n\n通常位于：\nDocuments\\xwechat_files\\你的账号ID\n\n是否手动选择目录？',
           confirmText: '手动选择',
           cancelText: '取消',
         );
-        
+
         if (!shouldSelectManually) {
           _addLogMessage('WARNING', '用户取消手动选择');
           await AppLogger.info('用户取消手动选择微信缓存目录');
@@ -720,10 +898,11 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
           });
           return;
         }
-        
+
         // 让用户选择目录
-        final selectedDirectory = await ImageKeyService.selectWeChatCacheDirectory();
-        
+        final selectedDirectory =
+            await ImageKeyService.selectWeChatCacheDirectory();
+
         if (selectedDirectory == null || selectedDirectory.isEmpty) {
           _addLogMessage('WARNING', '未选择目录');
           await AppLogger.info('用户未选择微信缓存目录');
@@ -732,26 +911,33 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
           });
           return;
         }
-        
+
         _addLogMessage('INFO', '已选择目录，重新尝试获取密钥...');
         await AppLogger.info('用户选择了目录: $selectedDirectory');
-        
+
         // 使用选择的目录重新获取
-        result = await ImageKeyService.getImageKeys(manualDirectory: selectedDirectory);
+        result = await ImageKeyService.getImageKeys(
+          manualDirectory: selectedDirectory,
+        );
       }
 
       if (result.success && result.xorKey != null && result.aesKey != null) {
-        final saveSuccess = await KeyStorage.saveImageKeys(result.xorKey!, result.aesKey!);
-        
+        final saveSuccess = await KeyStorage.saveImageKeys(
+          result.xorKey!,
+          result.aesKey!,
+        );
+
         if (saveSuccess) {
           setState(() {
             _imageXorKey = result.xorKey;
             _imageAesKey = result.aesKey;
             _imageKeyTimestamp = DateTime.now();
           });
-          
+
           _addLogMessage('SUCCESS', '图片密钥获取成功');
-          await AppLogger.success('图片密钥获取成功: XOR=0x${result.xorKey!.toRadixString(16).toUpperCase()}, AES=${result.aesKey}');
+          await AppLogger.success(
+            '图片密钥获取成功: XOR=0x${result.xorKey!.toRadixString(16).toUpperCase()}, AES=${result.aesKey}',
+          );
         } else {
           _addLogMessage('ERROR', '图片密钥保存失败');
           await AppLogger.error('图片密钥保存失败');
@@ -770,9 +956,6 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
     }
   }
 
-
-
-
   // 定期检查微信状态
   void _startStatusPolling() {
     Future.delayed(const Duration(seconds: 2), () {
@@ -784,24 +967,24 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
   }
 
   bool _isStoppingListener = false;
-  
+
   Future<void> _checkWechatStatus() async {
     final isRunning = DllInjector.isProcessRunning('Weixin.exe');
     if (mounted) {
       setState(() {
         _isWechatRunning = isRunning;
-        
+
         // 微信不运行时，重置注入状态并延迟停止监控
         if (!isRunning && _isDllInjected && !_isStoppingListener) {
           _isDllInjected = false;
           _isStoppingListener = true;
-          
+
           // 微信崩溃时DLL会写入密钥到日志，延迟3秒停止监控以确保读取到密钥
           Future.delayed(const Duration(seconds: 3), () async {
             if (mounted) {
               await _cleanupResources();
               _isStoppingListener = false;
-              
+
               // 如果还没有获取到密钥，提示用户
               if (_extractedKey == null && mounted) {
                 setState(() {
@@ -813,12 +996,12 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
             }
           });
         }
-        
+
         // 如果已经获取到密钥，不要覆盖状态消息
         if (!_isLoading && _extractedKey == null) {
           if (isRunning) {
             if (!_isDllInjected) {
-              _statusMessage = _wechatVersion != null 
+              _statusMessage = _wechatVersion != null
                   ? '检测到微信进程 (版本: $_wechatVersion)'
                   : '检测到微信进程';
             } else {
@@ -826,19 +1009,15 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
             }
             _statusLevel = 'INFO';
           } else {
-            _statusMessage = _wechatVersion != null 
+            _statusMessage = _wechatVersion != null
                 ? '未检测到微信进程 (记录的版本: $_wechatVersion)'
                 : '未检测到微信进程';
             _statusLevel = 'INFO';
           }
         }
-
       });
     }
   }
-
-
-
 
   /// 显示确认对话框
   Future<bool> _showConfirmDialog({
@@ -927,7 +1106,6 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
     return result ?? false;
   }
 
-
   /// 打开设置对话框
   Future<void> _openSettings() async {
     await AppLogger.info('用户打开设置页面');
@@ -942,73 +1120,257 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
     );
   }
 
-  Widget _buildStatusBanner() {
+  Widget _buildStatusBanner({bool emphasize = false}) {
     final bool isLoading = _isLoading;
-    final _StatusVisual visual = _statusVisual(isLoading ? 'LOADING' : _statusLevel);
-    final bannerKey = '${visual.stateKey}_${_statusMessage}_${isLoading ? 1 : 0}';
-    
+    final _StatusVisual visual = _statusVisual(
+      isLoading ? 'LOADING' : _statusLevel,
+    );
+    final bannerKey =
+        '${visual.stateKey}_${_statusMessage}_${isLoading ? 1 : 0}_${emphasize ? 1 : 0}';
+    final double horizontalPadding = emphasize ? 28 : 20;
+    final double verticalPadding = emphasize ? 26 : 18;
+    final borderRadius = BorderRadius.circular(emphasize ? 22 : 16);
+    final textColor = emphasize ? Colors.grey.shade900 : Colors.grey.shade800;
+    final double indicatorSize = emphasize ? 58 : 46;
+
     return AnimatedContainer(
       duration: const Duration(milliseconds: 320),
       curve: Curves.easeOutCubic,
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
+      padding: EdgeInsets.symmetric(
+        horizontal: horizontalPadding,
+        vertical: verticalPadding,
+      ),
       decoration: BoxDecoration(
         color: visual.background,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: borderRadius,
         border: Border.all(color: visual.border),
         boxShadow: [
           BoxShadow(
             color: visual.shadow,
-            blurRadius: isLoading ? 20 : 10,
+            blurRadius: isLoading ? 24 : 12,
             offset: const Offset(0, 6),
           ),
         ],
       ),
       child: AnimatedSwitcher(
-        duration: const Duration(milliseconds: 240),
-        switchInCurve: Curves.easeOut,
-        switchOutCurve: Curves.easeIn,
-        transitionBuilder: (child, animation) => FadeTransition(
-          opacity: animation,
-          child: SlideTransition(
-            position: Tween<Offset>(
-              begin: const Offset(0.02, 0.08),
-              end: Offset.zero,
-            ).animate(animation),
-            child: child,
-          ),
-        ),
+        duration: const Duration(milliseconds: 220),
+        switchInCurve: Curves.easeOutCubic,
+        switchOutCurve: Curves.easeInCubic,
+        transitionBuilder: (child, animation) =>
+            FadeTransition(opacity: animation, child: child),
         child: Row(
           key: ValueKey(bannerKey),
+          crossAxisAlignment: emphasize
+              ? CrossAxisAlignment.start
+              : CrossAxisAlignment.center,
           children: [
-            if (isLoading)
-              SizedBox(
-                width: 18,
-                height: 18,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  valueColor: AlwaysStoppedAnimation<Color>(visual.iconColor),
-                ),
-              )
-            else
-              Icon(
-                visual.icon,
-                color: visual.iconColor,
-                size: 18,
-              ),
-            const SizedBox(width: 14),
+            _buildStatusIndicator(
+              visual: visual,
+              isLoading: isLoading,
+              emphasize: emphasize,
+              size: indicatorSize,
+            ),
+            const SizedBox(width: 18),
             Expanded(
-              child: Text(
-                _statusMessage,
-                style: TextStyle(
-                  fontSize: 14,
-                  color: Colors.grey.shade800,
-                  fontFamily: 'HarmonyOS_SansSC',
-                  height: 1.4,
-                ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    _statusMessage,
+                    style: TextStyle(
+                      fontSize: emphasize ? 16 : 14,
+                      color: textColor,
+                      fontFamily: 'HarmonyOS_SansSC',
+                      height: 1.4,
+                      fontWeight: emphasize ? FontWeight.w600 : FontWeight.w500,
+                    ),
+                  ),
+                  if (isLoading) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      emphasize
+                          ? '\u6b63\u5728\u6267\u884c\u5173\u952e\u6b65\u9aa4\uff0c\u8bf7\u4fdd\u6301\u5fae\u4fe1\u754c\u9762\u9759\u6b62'
+                          : '\u6b63\u5728\u8fdb\u884c\u81ea\u52a8\u5904\u7406\uff0c\u8bf7\u7a0d\u5019',
+                      style: TextStyle(
+                        fontSize: emphasize ? 13 : 12,
+                        color: textColor.withOpacity(0.65),
+                        fontFamily: 'HarmonyOS_SansSC',
+                      ),
+                    ),
+                  ],
+                ],
               ),
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildStatusIndicator({
+    required _StatusVisual visual,
+    required bool isLoading,
+    required bool emphasize,
+    required double size,
+  }) {
+    if (isLoading) {
+      return SizedBox(
+        width: size,
+        height: size,
+        child: AnimatedBuilder(
+          animation: _statusBackdropController,
+          builder: (_, __) => CustomPaint(
+            painter: _CircularArrowIndicatorPainter(
+              progress: _statusBackdropController.value,
+              color: visual.iconColor,
+              emphasize: emphasize,
+            ),
+          ),
+        ),
+      );
+    }
+
+    return AnimatedBuilder(
+      animation: _statusBackdropController,
+      builder: (_, __) {
+        final double t = _statusBackdropController.value;
+        final double pulse =
+            1 + (emphasize ? 0.025 : 0.015) * math.sin(2 * math.pi * t);
+        final double glowStrength =
+            0.22 + 0.05 * math.sin((t + 0.35) * 2 * math.pi);
+
+        return Transform.scale(
+          scale: pulse,
+          child: SizedBox(
+            width: size,
+            height: size,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                Container(
+                  width: size,
+                  height: size,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: LinearGradient(
+                      colors: [
+                        visual.iconColor.withOpacity(glowStrength + 0.05),
+                        visual.iconColor.withOpacity(0.08),
+                      ],
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: visual.iconColor.withOpacity(glowStrength),
+                        blurRadius: 18,
+                        offset: const Offset(0, 8),
+                      ),
+                    ],
+                  ),
+                ),
+                Container(
+                  width: size * 0.78,
+                  height: size * 0.78,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: LinearGradient(
+                      colors: [
+                        visual.iconColor,
+                        visual.iconColor.withOpacity(0.78),
+                      ],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                  ),
+                ),
+                Container(
+                  width: size * 0.48,
+                  height: size * 0.48,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: Colors.white.withOpacity(0.18),
+                  ),
+                ),
+                Icon(
+                  visual.icon,
+                  color: Colors.white,
+                  size: emphasize ? 26 : 20,
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildLoadingTipsCard() {
+    final tips = [
+      '\u6267\u884c\u671f\u95f4\u8bf7\u4fdd\u6301\u5fae\u4fe1\u5904\u4e8e\u767b\u5f55\u754c\u9762\u6216\u684c\u9762\u524d\u53f0',
+      '\u4e0d\u8981\u968f\u610f\u70b9\u51fb\u9f20\u6807\u6216\u952e\u76d8\uff0c\u907f\u514d\u6253\u65ad\u81ea\u52a8\u6d41\u7a0b',
+      '\u5982\u82e5\u957f\u65f6\u95f4\u65e0\u54cd\u5e94\uff0c\u53ef\u7b49\u5f85\u63d0\u793a\u6216\u53d6\u6d88\u540e\u91cd\u8bd5',
+    ];
+
+    return Container(
+      padding: const EdgeInsets.all(22),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.grey.shade200),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 18,
+            offset: const Offset(0, 10),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '\u64cd\u4f5c\u63d0\u793a',
+            style: TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w600,
+              color: Colors.grey.shade900,
+              fontFamily: 'HarmonyOS_SansSC',
+            ),
+          ),
+          const SizedBox(height: 14),
+          ...tips.map(
+            (tip) => Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    width: 6,
+                    height: 6,
+                    margin: const EdgeInsets.only(top: 7, right: 10),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF07c160),
+                      borderRadius: BorderRadius.circular(3),
+                    ),
+                  ),
+                  Expanded(
+                    child: Text(
+                      tip,
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: Colors.grey.shade700,
+                        fontFamily: 'HarmonyOS_SansSC',
+                        height: 1.45,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1065,19 +1427,21 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
 
   Widget _buildSimpleActionButton() {
     final isEnabled = !_isLoading && _wechatVersion != null;
-    
+
     return Container(
       width: double.infinity,
       height: 50,
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(16),
-        boxShadow: isEnabled ? [
-          BoxShadow(
-            color: const Color(0xFF07c160).withOpacity(0.2),
-            blurRadius: 12,
-            offset: const Offset(0, 4),
-          ),
-        ] : null,
+        boxShadow: isEnabled
+            ? [
+                BoxShadow(
+                  color: const Color(0xFF07c160).withOpacity(0.2),
+                  blurRadius: 12,
+                  offset: const Offset(0, 4),
+                ),
+              ]
+            : null,
       ),
       child: ElevatedButton(
         onPressed: isEnabled ? _autoInjectDll : null,
@@ -1187,7 +1551,11 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
               const Spacer(),
               TextButton.icon(
                 onPressed: () => _copyKeyToClipboard(_savedKey!),
-                icon: const Icon(Icons.content_copy_rounded, size: 15, color: Color(0xFF07c160)),
+                icon: const Icon(
+                  Icons.content_copy_rounded,
+                  size: 15,
+                  color: Color(0xFF07c160),
+                ),
                 label: const Text(
                   '复制',
                   style: TextStyle(
@@ -1198,7 +1566,10 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
                   ),
                 ),
                 style: TextButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 6,
+                  ),
                   backgroundColor: const Color(0xFF07c160).withOpacity(0.08),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(10),
@@ -1258,10 +1629,7 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: Colors.blue.withOpacity(0.15),
-          width: 1.5,
-        ),
+        border: Border.all(color: Colors.blue.withOpacity(0.15), width: 1.5),
         boxShadow: [
           BoxShadow(
             color: Colors.blue.withOpacity(0.05),
@@ -1320,8 +1688,14 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
                       ),
                     ),
                     TextButton.icon(
-                      onPressed: () => _copyKeyToClipboard('0x${_imageXorKey!.toRadixString(16).toUpperCase().padLeft(2, '0')}'),
-                      icon: const Icon(Icons.content_copy_rounded, size: 14, color: Colors.blue),
+                      onPressed: () => _copyKeyToClipboard(
+                        '0x${_imageXorKey!.toRadixString(16).toUpperCase().padLeft(2, '0')}',
+                      ),
+                      icon: const Icon(
+                        Icons.content_copy_rounded,
+                        size: 14,
+                        color: Colors.blue,
+                      ),
                       label: const Text(
                         '复制',
                         style: TextStyle(
@@ -1332,7 +1706,10 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
                         ),
                       ),
                       style: TextButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 4,
+                        ),
                         backgroundColor: Colors.blue.withOpacity(0.08),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(8),
@@ -1367,7 +1744,11 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
                     ),
                     TextButton.icon(
                       onPressed: () => _copyKeyToClipboard(_imageAesKey!),
-                      icon: const Icon(Icons.content_copy_rounded, size: 14, color: Colors.blue),
+                      icon: const Icon(
+                        Icons.content_copy_rounded,
+                        size: 14,
+                        color: Colors.blue,
+                      ),
                       label: const Text(
                         '复制',
                         style: TextStyle(
@@ -1378,7 +1759,10 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
                         ),
                       ),
                       style: TextButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 4,
+                        ),
                         backgroundColor: Colors.blue.withOpacity(0.08),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(8),
@@ -1419,7 +1803,7 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
   Widget _buildLogItem(Map<String, String> log) {
     Color iconColor;
     IconData icon;
-    
+
     switch (log['type']) {
       case 'SUCCESS':
         iconColor = const Color(0xFF07c160);
@@ -1437,7 +1821,7 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
         iconColor = Colors.blue.shade400;
         icon = Icons.info_rounded;
     }
-    
+
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: Row(
@@ -1460,7 +1844,6 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
       ),
     );
   }
-
 
   @override
   Widget build(BuildContext context) {
@@ -1504,7 +1887,10 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
                         if (_wechatVersion != null) ...[
                           const SizedBox(height: 8),
                           Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 5,
+                            ),
                             decoration: BoxDecoration(
                               color: const Color(0xFF07c160).withOpacity(0.08),
                               borderRadius: BorderRadius.circular(12),
@@ -1550,31 +1936,36 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     // 当前状态
-                    _buildStatusBanner(),
-                    const SizedBox(height: 20),
-                    
+                    _buildStatusBanner(emphasize: _isLoading),
+                    if (_isLoading) ...[
+                      const SizedBox(height: 16),
+                      _buildLoadingTipsCard(),
+                      const SizedBox(height: 16),
+                    ] else
+                      const SizedBox(height: 20),
+
                     // 操作按钮 - 未注入时显示，超时或失败时也会重新显示
                     if (!_isDllInjected && !_isLoading)
                       _buildSimpleActionButton(),
                     const SizedBox(height: 20),
-                    
+
                     // 图片密钥获取按钮
                     if (_isWechatRunning && !_isGettingImageKey)
                       _buildImageKeyButton(),
                     const SizedBox(height: 32),
-                    
+
                     // 数据库密钥显示
                     if (_savedKey != null) ...[
                       _buildSimpleKeyCard(),
                       const SizedBox(height: 20),
                     ],
-                    
+
                     // 图片密钥显示
                     if (_imageXorKey != null && _imageAesKey != null) ...[
                       _buildImageKeyCard(),
                       const SizedBox(height: 28),
                     ],
-                    
+
                     // 日志消息
                     if (_logMessages.isNotEmpty) ...[
                       Padding(
@@ -1600,7 +1991,10 @@ class _MyHomePageState extends State<MyHomePage> with WindowListener {
                           ),
                         ),
                         child: Column(
-                          children: _logMessages.take(8).map((log) => _buildLogItem(log)).toList(),
+                          children: _logMessages
+                              .take(8)
+                              .map((log) => _buildLogItem(log))
+                              .toList(),
                         ),
                       ),
                     ],
