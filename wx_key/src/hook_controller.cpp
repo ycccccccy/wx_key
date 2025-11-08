@@ -106,7 +106,7 @@ namespace {
         return oss.str();
     }
 
-    // ??????????
+    // 设置错误信息
     void SetLastError(const std::string& error) {
         g_lastError = error;
         SendStatus(error, 2); // level 2 = error
@@ -157,7 +157,7 @@ HOOK_API bool InitializeHook(DWORD targetPid) {
     SendStatus("正在初始化系统调用...", 0);
     if (!IndirectSyscalls::Initialize()) {
         DWORD errorCode = GetLastError();
-        SetLastError(FormatWin32Error("?????????????????", errorCode));
+        SetLastError(FormatWin32Error("初始化间接系统调用失败", errorCode));
         return false;
     }
     
@@ -183,7 +183,7 @@ HOOK_API bool InitializeHook(DWORD targetPid) {
     g_targetProcess = hProcess;
     
     if (status != STATUS_SUCCESS || !g_targetProcess) {
-        SetLastError(FormatNtStatusError("???????????", status));
+        SetLastError(FormatNtStatusError("打开目标进程失败", status));
         return false;
     }
     
@@ -264,7 +264,7 @@ HOOK_API bool InitializeHook(DWORD targetPid) {
     );
     
     if (allocStatus != STATUS_SUCCESS || !remoteDataBuffer) {
-        SetLastError(FormatNtStatusError("???????????????????", allocStatus));
+        SetLastError(FormatNtStatusError("分配远程数据缓冲区失败", allocStatus));
         CloseHandle(g_targetProcess);
         g_targetProcess = nullptr;
         IndirectSyscalls::Cleanup();
@@ -278,9 +278,9 @@ HOOK_API bool InitializeHook(DWORD targetPid) {
     
     if (!g_ipcManager->Initialize(uniqueId)) {
         DWORD ipcError = GetLastError();
-        SetLastError(FormatWin32Error("?????IPC??????", ipcError));
+        SetLastError(FormatWin32Error("初始化IPC通信失败", ipcError));
         
-        // ????????????
+        // 清理远程缓冲区
         SIZE_T freeSize = 0;
         IndirectSyscalls::NtFreeVirtualMemory(
             g_targetProcess,
@@ -301,11 +301,11 @@ HOOK_API bool InitializeHook(DWORD targetPid) {
     
     if (!g_ipcManager->StartListening()) {
         DWORD ipcError = GetLastError();
-        SetLastError(FormatWin32Error("????IPC???????", ipcError));
+        SetLastError(FormatWin32Error("启动IPC监听失败", ipcError));
         g_ipcManager->Cleanup();
         g_ipcManager.reset();
         
-        // ????????????
+        // 清理远程缓冲区
         SIZE_T freeSize = 0;
         IndirectSyscalls::NtFreeVirtualMemory(
             g_targetProcess,
@@ -333,7 +333,7 @@ HOOK_API bool InitializeHook(DWORD targetPid) {
     SendStatus("正在安装远程Hook...", 0);
     if (!g_remoteHooker->InstallHook(targetFunctionAddress, shellcodeConfig)) {
         DWORD hookError = GetLastError();
-        SetLastError(FormatWin32Error("???Hook???", hookError));
+        SetLastError(FormatWin32Error("安装Hook失败", hookError));
         g_ipcManager->StopListening();
         g_ipcManager->Cleanup();
         g_ipcManager.reset();
