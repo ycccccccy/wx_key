@@ -52,6 +52,8 @@ class _StatusVisual {
   final Color shadow;
 }
 
+enum _BadgeGlyphType { exclamation, check }
+
 class _CircularArrowIndicatorPainter extends CustomPainter {
   const _CircularArrowIndicatorPainter({
     required this.progress,
@@ -168,6 +170,111 @@ class _CircularArrowIndicatorPainter extends CustomPainter {
     return oldDelegate.progress != progress ||
         oldDelegate.color != color ||
         oldDelegate.emphasize != emphasize;
+  }
+}
+
+class _CircularBadgeBackgroundPainter extends CustomPainter {
+  const _CircularBadgeBackgroundPainter({
+    required this.color,
+    required this.emphasize,
+  });
+
+  final Color color;
+  final bool emphasize;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final double diameter = size.shortestSide;
+    final double radius = diameter / 2;
+    final Offset center = Offset(size.width / 2, size.height / 2);
+
+    final Paint fillPaint = Paint()
+      ..shader = RadialGradient(
+        colors: [
+          color.withOpacity(emphasize ? 0.32 : 0.24),
+          color.withOpacity(emphasize ? 0.12 : 0.08),
+        ],
+      ).createShader(Rect.fromCircle(center: center, radius: radius));
+    canvas.drawCircle(center, radius, fillPaint);
+
+    final Paint borderPaint = Paint()
+      ..color = color.withOpacity(0.35)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = emphasize ? 2.2 : 1.8;
+    canvas.drawCircle(
+      center,
+      radius - borderPaint.strokeWidth / 2,
+      borderPaint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _CircularBadgeBackgroundPainter oldDelegate) {
+    return oldDelegate.color != color || oldDelegate.emphasize != emphasize;
+  }
+}
+
+class _StatusGlyphPainter extends CustomPainter {
+  const _StatusGlyphPainter({
+    required this.type,
+    required this.color,
+  });
+
+  final _BadgeGlyphType type;
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final Rect shaderBounds = Offset.zero & size;
+    final Paint paint = Paint()
+      ..shader = LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: [
+          color.withOpacity(0.96),
+          color.withOpacity(0.62),
+        ],
+      ).createShader(shaderBounds)
+      ..style = PaintingStyle.fill;
+
+    switch (type) {
+      case _BadgeGlyphType.check:
+        final Path checkPath = Path()
+          ..moveTo(size.width * 0.18, size.height * 0.52)
+          ..lineTo(size.width * 0.38, size.height * 0.7)
+          ..lineTo(size.width * 0.48, size.height * 0.6)
+          ..lineTo(size.width * 0.8, size.height * 0.28)
+          ..lineTo(size.width * 0.9, size.height * 0.38)
+          ..lineTo(size.width * 0.48, size.height * 0.86)
+          ..lineTo(size.width * 0.18, size.height * 0.58)
+          ..close();
+        canvas.drawShadow(checkPath, color.withOpacity(0.32), 4, false);
+        canvas.drawPath(checkPath, paint);
+        break;
+      case _BadgeGlyphType.exclamation:
+        final double barWidth = size.width * 0.18;
+        final Rect barRect = Rect.fromCenter(
+          center: Offset(size.width / 2, size.height * 0.36),
+          width: barWidth,
+          height: size.height * 0.44,
+        );
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(barRect, Radius.circular(barWidth / 2)),
+          paint,
+        );
+        final double dotRadius = barWidth * 0.6;
+        canvas.drawCircle(
+          Offset(size.width / 2, size.height * 0.78),
+          dotRadius,
+          paint,
+        );
+        break;
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _StatusGlyphPainter oldDelegate) {
+    return oldDelegate.type != type || oldDelegate.color != color;
   }
 }
 
@@ -1132,6 +1239,7 @@ class _MyHomePageState extends State<MyHomePage>
     final borderRadius = BorderRadius.circular(emphasize ? 22 : 16);
     final textColor = emphasize ? Colors.grey.shade900 : Colors.grey.shade800;
     final double indicatorSize = emphasize ? 58 : 46;
+    final bool showArrowIndicator = isLoading;
 
     return AnimatedContainer(
       duration: const Duration(milliseconds: 320),
@@ -1166,7 +1274,7 @@ class _MyHomePageState extends State<MyHomePage>
           children: [
             _buildStatusIndicator(
               visual: visual,
-              isLoading: isLoading,
+              showArrowIndicator: showArrowIndicator,
               emphasize: emphasize,
               size: indicatorSize,
             ),
@@ -1210,11 +1318,11 @@ class _MyHomePageState extends State<MyHomePage>
 
   Widget _buildStatusIndicator({
     required _StatusVisual visual,
-    required bool isLoading,
+    required bool showArrowIndicator,
     required bool emphasize,
     required double size,
   }) {
-    if (isLoading) {
+    if (showArrowIndicator) {
       return SizedBox(
         width: size,
         height: size,
@@ -1231,78 +1339,28 @@ class _MyHomePageState extends State<MyHomePage>
       );
     }
 
-    return AnimatedBuilder(
-      animation: _statusBackdropController,
-      builder: (_, __) {
-        final double t = _statusBackdropController.value;
-        final double pulse =
-            1 + (emphasize ? 0.025 : 0.015) * math.sin(2 * math.pi * t);
-        final double glowStrength =
-            0.22 + 0.05 * math.sin((t + 0.35) * 2 * math.pi);
-
-        return Transform.scale(
-          scale: pulse,
+    final _BadgeGlyphType glyph = _badgeGlyphForVisual(visual);
+    return SizedBox(
+      width: size,
+      height: size,
+      child: CustomPaint(
+        painter: _CircularBadgeBackgroundPainter(
+          color: visual.iconColor,
+          emphasize: emphasize,
+        ),
+        child: Center(
           child: SizedBox(
-            width: size,
-            height: size,
-            child: Stack(
-              alignment: Alignment.center,
-              children: [
-                Container(
-                  width: size,
-                  height: size,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    gradient: LinearGradient(
-                      colors: [
-                        visual.iconColor.withOpacity(glowStrength + 0.05),
-                        visual.iconColor.withOpacity(0.08),
-                      ],
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                    ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: visual.iconColor.withOpacity(glowStrength),
-                        blurRadius: 18,
-                        offset: const Offset(0, 8),
-                      ),
-                    ],
-                  ),
-                ),
-                Container(
-                  width: size * 0.78,
-                  height: size * 0.78,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    gradient: LinearGradient(
-                      colors: [
-                        visual.iconColor,
-                        visual.iconColor.withOpacity(0.78),
-                      ],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                    ),
-                  ),
-                ),
-                Container(
-                  width: size * 0.48,
-                  height: size * 0.48,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: Colors.white.withOpacity(0.18),
-                  ),
-                ),
-                Icon(
-                  visual.icon,
-                  color: Colors.white,
-                  size: emphasize ? 26 : 20,
-                ),
-              ],
+            width: size * 0.62,
+            height: size * 0.62,
+            child: CustomPaint(
+              painter: _StatusGlyphPainter(
+                type: glyph,
+                color: visual.iconColor,
+              ),
             ),
           ),
-        );
-      },
+        ),
+      ),
     );
   }
 
@@ -1422,6 +1480,15 @@ class _MyHomePageState extends State<MyHomePage>
           icon: Icons.info_rounded,
           shadow: const Color(0xFF4C6FFF).withOpacity(0.12),
         );
+    }
+  }
+
+  _BadgeGlyphType _badgeGlyphForVisual(_StatusVisual visual) {
+    switch (visual.stateKey) {
+      case 'success':
+        return _BadgeGlyphType.check;
+      default:
+        return _BadgeGlyphType.exclamation;
     }
   }
 
