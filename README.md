@@ -40,15 +40,9 @@ This project is a tool for obtaining WeChat database and decrypting WeChat cache
    从 Releases 页面下载最新版本的提取工具的压缩包
 
 2. **运行**
-   以管理员身份打开解压后压缩包中的wx_key.exe或自行编译得到的wx_key.exe
+   解压运行压缩包中的wx_key.exe或运行自行编译得到的wx_key.exe
 
-> **注意**：请不要把工具文件夹和dll放在任何中文字符的目录下
-
-### 使用指南
-
-1. **启动应用**: 应用启动后将自动检测微信的版本
-2. **开始提取**：检测完版本后将会尝试自动下载Dll，若版本不支持将无法继续
-3. **查看密钥**：如果版本支持，在下载完将自动注入获取密钥，按照提示登录微信即可查看密钥，获取完成后回到应用内即可查看，微信崩溃是正常的
+> **注意**：不要把工具文件夹放在任何中文字符的目录下
 
 如果是获取图片密钥则需要保持微信登录状态并打开一张图片后再前往应用内获取图片密钥
 
@@ -56,13 +50,13 @@ This project is a tool for obtaining WeChat database and decrypting WeChat cache
 
 ### 新架构概述（v2.0 起）
 
-自 v2.0 起，`wx_key` 使用“控制器 DLL + Flutter 轮询”方案：
+自 v2.0 起，`wx_key` 使用“DLL Hook + Flutter UI”架构：
 
 | 组件 | 作用 |
 | --- | --- |
 | 控制器 DLL（assets/dll/wx_key.dll） | 由 Flutter 进程加载，通过远程内存操作在 WeChat 中安装 Hook |
 | 共享缓冲区 + IPCManager | 传递密钥和状态数据 |
-| Flutter 轮询流 | 定期调用 `PollKeyData` / `GetStatusMessage`，刷新 UI 和日志 |
+| Flutter  | 定期调用 `PollKeyData` / `GetStatusMessage`，刷新 UI 和日志 |
 
 
 
@@ -79,7 +73,7 @@ wx_key/
 │   │   ├── image_key_service.dart        # 图片密钥提取
 │   │   └── app_logger.dart / log_reader.dart
 │   └── widgets/                          # 自定义组件
-├── assets/dll/wx_key.dll                 # 控制器 DLL（随包分发）
+├── assets/dll/wx_key.dll                 # 控制器 DLL
 ├── wx_key/                               # C++ 原生项目（Visual Studio）
 │   ├── include/                          # Hook、IPC、Shellcode 头文件
 │   ├── src/                              # hook_controller、remote_scanner 等实现
