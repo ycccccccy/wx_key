@@ -54,8 +54,8 @@ class _StatusVisual {
 
 enum _BadgeGlyphType { exclamation, check }
 
-class _CircularArrowIndicatorPainter extends CustomPainter {
-  const _CircularArrowIndicatorPainter({
+class _CircularArrowGlyphPainter extends CustomPainter {
+  const _CircularArrowGlyphPainter({
     required this.progress,
     required this.color,
     required this.emphasize,
@@ -70,25 +70,6 @@ class _CircularArrowIndicatorPainter extends CustomPainter {
     final double diameter = size.shortestSide;
     final double radius = diameter / 2;
     final Offset center = Offset(size.width / 2, size.height / 2);
-
-    final Paint fillPaint = Paint()
-      ..shader = RadialGradient(
-        colors: [
-          color.withOpacity(emphasize ? 0.32 : 0.24),
-          color.withOpacity(emphasize ? 0.12 : 0.08),
-        ],
-      ).createShader(Rect.fromCircle(center: center, radius: radius));
-    canvas.drawCircle(center, radius, fillPaint);
-
-    final Paint borderPaint = Paint()
-      ..color = color.withOpacity(0.35)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = emphasize ? 2.2 : 1.8;
-    canvas.drawCircle(
-      center,
-      radius - borderPaint.strokeWidth / 2,
-      borderPaint,
-    );
 
     final double innerRadius = radius - 4;
     final double arrowHeight = diameter * (emphasize ? 0.6 : 0.54);
@@ -166,7 +147,7 @@ class _CircularArrowIndicatorPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant _CircularArrowIndicatorPainter oldDelegate) {
+  bool shouldRepaint(covariant _CircularArrowGlyphPainter oldDelegate) {
     return oldDelegate.progress != progress ||
         oldDelegate.color != color ||
         oldDelegate.emphasize != emphasize;
@@ -218,63 +199,139 @@ class _StatusGlyphPainter extends CustomPainter {
   const _StatusGlyphPainter({
     required this.type,
     required this.color,
+    required this.emphasize,
+    required this.progress,
   });
 
   final _BadgeGlyphType type;
   final Color color;
+  final bool emphasize;
+  final double progress;
 
   @override
   void paint(Canvas canvas, Size size) {
-    final Rect shaderBounds = Offset.zero & size;
-    final Paint paint = Paint()
-      ..shader = LinearGradient(
-        begin: Alignment.topCenter,
-        end: Alignment.bottomCenter,
-        colors: [
-          color.withOpacity(0.96),
-          color.withOpacity(0.62),
-        ],
-      ).createShader(shaderBounds)
-      ..style = PaintingStyle.fill;
+    final double insetFactor = emphasize ? 0.18 : 0.22;
+    final double inset = size.shortestSide * insetFactor;
+    final Rect drawBounds = Rect.fromLTWH(
+      inset,
+      inset,
+      size.width - inset * 2,
+      size.height - inset * 2,
+    );
+    final Shader shader = LinearGradient(
+      begin: Alignment.topCenter,
+      end: Alignment.bottomCenter,
+      colors: [
+        color.withOpacity(0.96),
+        color.withOpacity(0.6),
+      ],
+    ).createShader(drawBounds);
 
     switch (type) {
       case _BadgeGlyphType.check:
-        final Path checkPath = Path()
-          ..moveTo(size.width * 0.18, size.height * 0.52)
-          ..lineTo(size.width * 0.38, size.height * 0.7)
-          ..lineTo(size.width * 0.48, size.height * 0.6)
-          ..lineTo(size.width * 0.8, size.height * 0.28)
-          ..lineTo(size.width * 0.9, size.height * 0.38)
-          ..lineTo(size.width * 0.48, size.height * 0.86)
-          ..lineTo(size.width * 0.18, size.height * 0.58)
-          ..close();
-        canvas.drawShadow(checkPath, color.withOpacity(0.32), 4, false);
-        canvas.drawPath(checkPath, paint);
+        _paintCheckGlyph(canvas, drawBounds, shader);
         break;
       case _BadgeGlyphType.exclamation:
-        final double barWidth = size.width * 0.18;
-        final Rect barRect = Rect.fromCenter(
-          center: Offset(size.width / 2, size.height * 0.36),
-          width: barWidth,
-          height: size.height * 0.44,
-        );
-        canvas.drawRRect(
-          RRect.fromRectAndRadius(barRect, Radius.circular(barWidth / 2)),
-          paint,
-        );
-        final double dotRadius = barWidth * 0.6;
-        canvas.drawCircle(
-          Offset(size.width / 2, size.height * 0.78),
-          dotRadius,
-          paint,
-        );
+        _paintExclamationGlyph(canvas, drawBounds, shader);
         break;
     }
   }
 
+  void _paintCheckGlyph(Canvas canvas, Rect bounds, Shader shader) {
+    final double strokeWidth = bounds.shortestSide * 0.18;
+    final Path checkPath = Path()
+      ..moveTo(
+        bounds.left + bounds.width * 0.14,
+        bounds.top + bounds.height * 0.55,
+      )
+      ..lineTo(
+        bounds.left + bounds.width * 0.39,
+        bounds.top + bounds.height * 0.82,
+      )
+      ..lineTo(
+        bounds.left + bounds.width * 0.86,
+        bounds.top + bounds.height * 0.2,
+      );
+
+    final double reveal =
+        Curves.easeOutCubic.transform(progress.clamp(0.0, 1.0));
+    final Rect clipRect = Rect.fromLTWH(
+      bounds.left,
+      bounds.top,
+      bounds.width,
+      bounds.height * reveal,
+    );
+
+    canvas.save();
+    canvas.clipRect(clipRect);
+
+    final Paint glowPaint = Paint()
+      ..color = color.withOpacity(0.28 * reveal)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = strokeWidth
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3.2);
+    canvas.drawPath(checkPath, glowPaint);
+
+    final Paint strokePaint = Paint()
+      ..shader = shader
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = strokeWidth
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+    canvas.drawPath(checkPath, strokePaint);
+    canvas.restore();
+  }
+
+  void _paintExclamationGlyph(Canvas canvas, Rect bounds, Shader shader) {
+    final double t = progress.clamp(0.0, 1.0);
+    final double wobble =
+        math.sin(t * math.pi * 3) * (1 - t) * (emphasize ? 0.28 : 0.24);
+    final double opacity = Curves.easeOut.transform(t);
+    final double barWidth = bounds.width * 0.18;
+    final double barHeight = bounds.height * 0.58;
+    final RRect bar = RRect.fromRectAndRadius(
+      Rect.fromCenter(
+        center: Offset(bounds.center.dx, bounds.top + barHeight / 2),
+        width: barWidth,
+        height: barHeight,
+      ),
+      Radius.circular(barWidth / 2),
+    );
+
+    final double dotRadius = barWidth * 0.7;
+    final Offset dotCenter = Offset(
+      bounds.center.dx,
+      bounds.bottom - dotRadius * 0.9,
+    );
+
+    canvas.save();
+    canvas.translate(bounds.center.dx, bounds.center.dy);
+    canvas.rotate(wobble);
+    canvas.translate(-bounds.center.dx, -bounds.center.dy);
+
+    final Paint glowPaint = Paint()
+      ..color = color.withOpacity(0.22 * opacity)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3);
+    canvas.drawRRect(bar, glowPaint);
+    canvas.drawCircle(dotCenter, dotRadius, glowPaint);
+
+    final Paint fillPaint = Paint()
+      ..shader = shader
+      ..style = PaintingStyle.fill;
+    canvas.drawRRect(bar, fillPaint);
+    canvas.drawCircle(dotCenter, dotRadius, fillPaint);
+
+    canvas.restore();
+  }
+
   @override
   bool shouldRepaint(covariant _StatusGlyphPainter oldDelegate) {
-    return oldDelegate.type != type || oldDelegate.color != color;
+    return oldDelegate.type != type ||
+        oldDelegate.color != color ||
+        oldDelegate.emphasize != emphasize ||
+        oldDelegate.progress != progress;
   }
 }
 
@@ -966,14 +1023,38 @@ class _MyHomePageState extends State<MyHomePage>
 
   /// 获取图片密钥（XOR和AES）
   Future<void> _getImageKeys() async {
+    if (_isLoading) {
+      _addLogMessage('WARNING', '正在提取数据库密钥，请稍后再获取图片密钥');
+      await AppLogger.warning('数据库密钥提取期间无法获取图片密钥');
+      if (mounted) {
+        setState(() {
+          _statusMessage = '数据库密钥提取中，请稍候再试图片密钥';
+          _statusLevel = 'WARNING';
+        });
+      }
+      return;
+    }
+
+    if (_isGettingImageKey) {
+      return;
+    }
+
     if (!_isWechatRunning) {
       _addLogMessage('WARNING', '请先启动微信');
       await AppLogger.warning('请先启动微信后再获取图片密钥');
+      if (mounted) {
+        setState(() {
+          _statusMessage = '请先启动微信，再尝试获取图片密钥';
+          _statusLevel = 'WARNING';
+        });
+      }
       return;
     }
 
     setState(() {
       _isGettingImageKey = true;
+      _statusMessage = '正在获取图片密钥...';
+      _statusLevel = 'INFO';
     });
 
     try {
@@ -1002,6 +1083,8 @@ class _MyHomePageState extends State<MyHomePage>
           await AppLogger.info('用户取消手动选择微信缓存目录');
           setState(() {
             _isGettingImageKey = false;
+            _statusMessage = '已取消获取图片密钥';
+            _statusLevel = 'WARNING';
           });
           return;
         }
@@ -1015,6 +1098,8 @@ class _MyHomePageState extends State<MyHomePage>
           await AppLogger.info('用户未选择微信缓存目录');
           setState(() {
             _isGettingImageKey = false;
+            _statusMessage = '未选择目录，已取消获取图片密钥';
+            _statusLevel = 'WARNING';
           });
           return;
         }
@@ -1039,6 +1124,8 @@ class _MyHomePageState extends State<MyHomePage>
             _imageXorKey = result.xorKey;
             _imageAesKey = result.aesKey;
             _imageKeyTimestamp = DateTime.now();
+            _statusMessage = '图片密钥获取成功，可以在下方查看';
+            _statusLevel = 'SUCCESS';
           });
 
           _addLogMessage('SUCCESS', '图片密钥获取成功');
@@ -1048,10 +1135,22 @@ class _MyHomePageState extends State<MyHomePage>
         } else {
           _addLogMessage('ERROR', '图片密钥保存失败');
           await AppLogger.error('图片密钥保存失败');
+          if (mounted) {
+            setState(() {
+              _statusMessage = '图片密钥获取成功但保存失败';
+              _statusLevel = 'ERROR';
+            });
+          }
         }
       } else {
         _addLogMessage('ERROR', result.error ?? '图片密钥获取失败');
         await AppLogger.error('图片密钥获取失败: ${result.error}');
+        if (mounted) {
+          setState(() {
+            _statusMessage = result.error ?? '图片密钥获取失败';
+            _statusLevel = 'ERROR';
+          });
+        }
       }
     } catch (e, stackTrace) {
       _addLogMessage('ERROR', '获取图片密钥时出错');
@@ -1105,7 +1204,7 @@ class _MyHomePageState extends State<MyHomePage>
         }
 
         // 如果已经获取到密钥，不要覆盖状态消息
-        if (!_isLoading && _extractedKey == null) {
+        if (!_isLoading && !_isGettingImageKey && _extractedKey == null) {
           if (isRunning) {
             if (!_isDllInjected) {
               _statusMessage = _wechatVersion != null
@@ -1229,17 +1328,19 @@ class _MyHomePageState extends State<MyHomePage>
 
   Widget _buildStatusBanner({bool emphasize = false}) {
     final bool isLoading = _isLoading;
+    final bool isImageLoading = _isGettingImageKey;
+    final bool showArrowIndicator = isLoading || isImageLoading;
     final _StatusVisual visual = _statusVisual(
-      isLoading ? 'LOADING' : _statusLevel,
+      showArrowIndicator ? 'LOADING' : _statusLevel,
     );
     final bannerKey =
-        '${visual.stateKey}_${_statusMessage}_${isLoading ? 1 : 0}_${emphasize ? 1 : 0}';
+        '${visual.stateKey}_${_statusMessage}_${showArrowIndicator ? 1 : 0}_${emphasize ? 1 : 0}_${isImageLoading ? 1 : 0}';
     final double horizontalPadding = emphasize ? 28 : 20;
     final double verticalPadding = emphasize ? 26 : 18;
     final borderRadius = BorderRadius.circular(emphasize ? 22 : 16);
     final textColor = emphasize ? Colors.grey.shade900 : Colors.grey.shade800;
-    final double indicatorSize = emphasize ? 58 : 46;
-    final bool showArrowIndicator = isLoading;
+    const double indicatorDiameter = 58;
+    final double indicatorSize = indicatorDiameter;
 
     return AnimatedContainer(
       duration: const Duration(milliseconds: 320),
@@ -1255,7 +1356,7 @@ class _MyHomePageState extends State<MyHomePage>
         boxShadow: [
           BoxShadow(
             color: visual.shadow,
-            blurRadius: isLoading ? 24 : 12,
+            blurRadius: showArrowIndicator ? 24 : 12,
             offset: const Offset(0, 6),
           ),
         ],
@@ -1322,43 +1423,54 @@ class _MyHomePageState extends State<MyHomePage>
     required bool emphasize,
     required double size,
   }) {
-    if (showArrowIndicator) {
+    final Color badgeColor = visual.iconColor;
+    final _BadgeGlyphType glyph = _badgeGlyphForVisual(visual);
+
+    Widget buildBadge(CustomPainter foregroundPainter) {
       return SizedBox(
         width: size,
         height: size,
-        child: AnimatedBuilder(
-          animation: _statusBackdropController,
-          builder: (_, __) => CustomPaint(
-            painter: _CircularArrowIndicatorPainter(
-              progress: _statusBackdropController.value,
-              color: visual.iconColor,
-              emphasize: emphasize,
-            ),
+        child: CustomPaint(
+          painter: _CircularBadgeBackgroundPainter(
+            color: badgeColor,
+            emphasize: emphasize,
+          ),
+          foregroundPainter: foregroundPainter,
+        ),
+      );
+    }
+
+    if (showArrowIndicator) {
+      return AnimatedBuilder(
+        animation: _statusBackdropController,
+        builder: (_, __) => buildBadge(
+          _CircularArrowGlyphPainter(
+            progress: _statusBackdropController.value,
+            color: badgeColor,
+            emphasize: emphasize,
           ),
         ),
       );
     }
 
-    final _BadgeGlyphType glyph = _badgeGlyphForVisual(visual);
-    return SizedBox(
-      width: size,
-      height: size,
-      child: CustomPaint(
-        painter: _CircularBadgeBackgroundPainter(
-          color: visual.iconColor,
+    final Duration animationDuration = glyph == _BadgeGlyphType.check
+        ? const Duration(milliseconds: 420)
+        : const Duration(milliseconds: 360);
+    final Curve animationCurve = glyph == _BadgeGlyphType.check
+        ? Curves.easeOutCubic
+        : Curves.easeOutBack;
+
+    return TweenAnimationBuilder<double>(
+      key: ValueKey('${glyph.index}_${emphasize ? 1 : 0}'),
+      tween: Tween<double>(begin: 0, end: 1),
+      duration: animationDuration,
+      curve: animationCurve,
+      builder: (_, value, __) => buildBadge(
+        _StatusGlyphPainter(
+          type: glyph,
+          color: badgeColor,
           emphasize: emphasize,
-        ),
-        child: Center(
-          child: SizedBox(
-            width: size * 0.62,
-            height: size * 0.62,
-            child: CustomPaint(
-              painter: _StatusGlyphPainter(
-                type: glyph,
-                color: visual.iconColor,
-              ),
-            ),
-          ),
+          progress: value,
         ),
       ),
     );
@@ -1546,6 +1658,14 @@ class _MyHomePageState extends State<MyHomePage>
   }
 
   Widget _buildImageKeyButton() {
+    final bool isBusy = _isGettingImageKey || _isLoading;
+    final bool isImageTask = _isGettingImageKey;
+    final String labelText = isImageTask
+        ? '正在获取图片密钥...'
+        : _isLoading
+            ? '等待数据库密钥完成'
+            : '获取图片密钥';
+
     return Container(
       width: double.infinity,
       height: 48,
@@ -1560,10 +1680,29 @@ class _MyHomePageState extends State<MyHomePage>
         ],
       ),
       child: ElevatedButton.icon(
-        onPressed: _getImageKeys,
-        label: const Text(
-          '获取图片密钥',
-          style: TextStyle(
+        onPressed: isBusy ? null : _getImageKeys,
+        icon: AnimatedSwitcher(
+          duration: const Duration(milliseconds: 200),
+          child: isBusy
+              ? SizedBox(
+                  key: const ValueKey('image-key-loading'),
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    valueColor:
+                        AlwaysStoppedAnimation<Color>(Colors.white),
+                  ),
+                )
+              : const Icon(
+                  Icons.image_outlined,
+                  key: ValueKey('image-key-icon'),
+                  size: 18,
+                ),
+        ),
+        label: Text(
+          labelText,
+          style: const TextStyle(
             fontSize: 14,
             fontWeight: FontWeight.w500,
             fontFamily: 'HarmonyOS_SansSC',
@@ -1573,6 +1712,8 @@ class _MyHomePageState extends State<MyHomePage>
         style: ElevatedButton.styleFrom(
           backgroundColor: Colors.blue.shade600,
           foregroundColor: Colors.white,
+          disabledBackgroundColor: Colors.blue.shade200,
+          disabledForegroundColor: Colors.white70,
           elevation: 0,
           shadowColor: Colors.transparent,
           shape: RoundedRectangleBorder(
@@ -2003,7 +2144,9 @@ class _MyHomePageState extends State<MyHomePage>
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     // 当前状态
-                    _buildStatusBanner(emphasize: _isLoading),
+                    _buildStatusBanner(
+                      emphasize: _isLoading || _isGettingImageKey,
+                    ),
                     if (_isLoading) ...[
                       const SizedBox(height: 16),
                       _buildLoadingTipsCard(),
@@ -2017,7 +2160,7 @@ class _MyHomePageState extends State<MyHomePage>
                     const SizedBox(height: 20),
 
                     // 图片密钥获取按钮
-                    if (_isWechatRunning && !_isGettingImageKey)
+                    if (_isWechatRunning)
                       _buildImageKeyButton(),
                     const SizedBox(height: 32),
 
