@@ -3,7 +3,6 @@ import 'dart:io';
 import 'dart:async';
 import 'package:ffi/ffi.dart';
 import 'package:win32/win32.dart';
-import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as path;
 import 'package:file_picker/file_picker.dart';
 import 'key_storage.dart';
@@ -30,6 +29,26 @@ enum DllDownloadError {
 }
 
 class DllInjector {
+  static List<int>? _topWindowHandlesCollector;
+  static List<_ChildWindowInfo>? _childWindowCollector;
+  static const List<String> _readyComponentTexts = [
+    '聊天',
+    '登录',
+    '账号',
+  ];
+  static const List<String> _readyComponentClassMarkers = [
+    'WeChat',
+    'Weixin',
+    'TXGuiFoundation',
+    'Qt5',
+    'ChatList',
+    'MainWnd',
+    'BrowserWnd',
+    'ListView',
+    '#32770',
+  ];
+  static const int _readyChildCountThreshold = 14;
+
   static List<int> findProcessIds(String processName) {
     final pidsFound = <int>[];
     final processIds = calloc<DWORD>(1024);
@@ -73,115 +92,6 @@ class DllInjector {
 
   static bool isProcessRunning(String processName) {
     return findProcessIds(processName).isNotEmpty;
-  }
-
-  static bool injectDllByPid(int pid, String dllPath) {
-    AppLogger.info('开始DLL注入到进程 $pid');
-
-    final hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
-    if (hProcess == 0) {
-      final error = getLastErrorMessage();
-      AppLogger.error('无法打开目标进程 $pid: $error');
-      return false;
-    }
-    AppLogger.info('成功打开进程句柄');
-
-    final remoteMemory = VirtualAllocEx(
-        hProcess, nullptr, dllPath.length + 1, MEM_COMMIT, PAGE_READWRITE);
-    if (remoteMemory == nullptr) {
-      final error = getLastErrorMessage();
-      AppLogger.error('无法在目标进程中分配内存: $error');
-      CloseHandle(hProcess);
-      return false;
-    }
-    AppLogger.info('成功分配远程内存');
-
-    final dllPathC = dllPath.toNativeUtf8();
-    final written = calloc<SIZE_T>();
-    try {
-      if (WriteProcessMemory(hProcess, remoteMemory, dllPathC,
-              dllPath.length + 1, written) ==
-          0) {
-        final error = getLastErrorMessage();
-        AppLogger.error('无法写入DLL路径到目标进程: $error');
-        VirtualFreeEx(hProcess, remoteMemory, 0, MEM_RELEASE);
-        CloseHandle(hProcess);
-        return false;
-      }
-      AppLogger.info('成功写入DLL路径到远程内存');
-    } finally {
-      free(dllPathC);
-      free(written);
-    }
-
-    final hKernel32 = GetModuleHandle('kernel32.dll'.toNativeUtf16());
-    final loadLibraryAddr = GetProcAddress(hKernel32, 'LoadLibraryA'.toNativeUtf8().cast());
-    if (loadLibraryAddr == nullptr) {
-      final error = getLastErrorMessage();
-      AppLogger.error('无法获取LoadLibraryA函数地址: $error');
-      VirtualFreeEx(hProcess, remoteMemory, 0, MEM_RELEASE);
-      CloseHandle(hProcess);
-      return false;
-    }
-    AppLogger.info('成功获取LoadLibraryA函数地址');
-
-    final hThread = CreateRemoteThread(
-        hProcess, nullptr, 0, loadLibraryAddr.cast(), remoteMemory, 0, nullptr);
-    if (hThread == 0) {
-      final error = getLastErrorMessage();
-      AppLogger.error('无法创建远程线程: $error');
-      VirtualFreeEx(hProcess, remoteMemory, 0, MEM_RELEASE);
-      CloseHandle(hProcess);
-      return false;
-    }
-    AppLogger.info('成功创建远程线程');
-
-    // ignore: unused_local_variable
-    final waitResult = WaitForSingleObject(hThread, INFINITE);
-    AppLogger.info('远程线程执行完成');
-
-    VirtualFreeEx(hProcess, remoteMemory, 0, MEM_RELEASE);
-    CloseHandle(hThread);
-    CloseHandle(hProcess);
-    AppLogger.success('DLL注入流程全部完成');
-
-    return true;
-  }
-
-  static bool injectDll(String processName, String dllPath) {
-    AppLogger.info('开始准备DLL注入，目标进程: $processName');
-    
-    if (!File(dllPath).existsSync()) {
-      AppLogger.error('DLL文件不存在: $dllPath');
-      return false;
-    }
-
-    // 找到所有指定进程名的 pid
-    final pids = findProcessIds(processName);
-
-    if (pids.isEmpty) {
-      AppLogger.error('未找到目标进程 $processName');
-      return false;
-    }
-    AppLogger.info('找到 ${pids.length} 个目标进程: $pids');
-
-    // 从这些进程中找到拥有微信窗口的主进程
-    final mainPid = _findMainPidFromCandidates(pids);
-
-    if (mainPid == null) {
-      AppLogger.error('未能从候选进程中找到主进程窗口');
-      return false;
-    }
-    AppLogger.info('成功确定主进程 PID: $mainPid');
-
-    
-    if (injectDllByPid(mainPid, dllPath)) {
-      AppLogger.success('DLL注入成功完成');
-      return true;
-    } else {
-      AppLogger.error('DLL注入失败');
-      return false;
-    }
   }
 
   /// 从注册表获取微信安装路径
@@ -569,118 +479,8 @@ class DllInjector {
     }
   }
 
-  /// 获取GitHub上最新的适配版本
-  /// 返回最新版本号，如果获取失败返回null
-  static Future<String?> getLatestSupportedVersion() async {
-    try {
-      final url = 'https://api.github.com/repos/ycccccccy/wx_key/releases/tags/dlls';
-      final response = await http.get(
-        Uri.parse(url),
-        headers: {'User-Agent': 'wx_key_tool'},
-      ).timeout(const Duration(seconds: 10));
-      
-      if (response.statusCode == 200) {
-        // 解析JSON响应，提取所有DLL文件名
-        final data = response.body;
-        // 匹配所有 wx_key-4.x.x.x.dll 格式的文件名
-        final versionRegex = RegExp(r'wx_key-(4\.\d+\.\d+\.\d+)\.dll');
-        final matches = versionRegex.allMatches(data);
-        
-        if (matches.isEmpty) return null;
-        
-        // 提取所有版本号并排序
-        final versions = matches.map((m) => m.group(1)!).toList();
-        versions.sort((a, b) => _compareVersions(b, a)); // 降序排序
-        
-        return versions.first;
-      }
-      return null;
-    } catch (e) {
-      return null;
-    }
-  }
 
-  /// 比较两个版本号
-  /// 返回: a > b 返回正数, a == b 返回0, a < b 返回负数
-  static int _compareVersions(String a, String b) {
-    final aParts = a.split('.').map(int.parse).toList();
-    final bParts = b.split('.').map(int.parse).toList();
-    
-    for (int i = 0; i < 4; i++) {
-      if (aParts[i] != bParts[i]) {
-        return aParts[i] - bParts[i];
-      }
-    }
-    return 0;
-  }
-
-  /// 比较当前版本和最新支持版本
-  /// 返回: 1表示当前版本更新, 0表示相同, -1表示当前版本更旧, null表示无法比较
-  static Future<int?> compareWithLatestVersion(String currentVersion) async {
-    final latestVersion = await getLatestSupportedVersion();
-    if (latestVersion == null) return null;
-    
-    final result = _compareVersions(currentVersion, latestVersion);
-    if (result > 0) return 1;
-    if (result < 0) return -1;
-    return 0;
-  }
-
-  static Future<DllDownloadResult> downloadDll(String version) async {
-    try {
-      final tempDir = Directory.systemTemp;
-      // 使用通用的 wx_key.dll
-      final dllPath = path.join(tempDir.path, 'wx_key.dll');
-      final dllFile = File(dllPath);
-      
-      // 先检查本地是否已有该DLL文件
-      if (await dllFile.exists()) {
-        final fileSize = await dllFile.length();
-        // 检查文件大小是否合理（至少1KB，避免损坏的文件）
-        if (fileSize > 1024) {
-          return DllDownloadResult.success(dllPath);
-        }
-        // 文件损坏，删除后重新下载
-        await dllFile.delete();
-      }
-      
-      // 本地没有或文件损坏，从GitHub下载通用DLL
-      final url = 'https://github.com/ycccccccy/wx_key/releases/download/dlls/wx_key.dll';
-      
-      try {
-        final response = await http.get(
-          Uri.parse(url),
-          headers: {'User-Agent': 'wx_key_tool'},
-        ).timeout(const Duration(seconds: 10));
-        
-        if (response.statusCode == 200) {
-          await dllFile.writeAsBytes(response.bodyBytes);
-          return DllDownloadResult.success(dllPath);
-        } else if (response.statusCode == 404) {
-          // 404 表示DLL文件不存在
-          return DllDownloadResult.failure(DllDownloadError.versionNotFound);
-        } else {
-          // 其他HTTP错误视为网络问题
-          return DllDownloadResult.failure(DllDownloadError.networkError);
-        }
-      } on http.ClientException catch (_) {
-        // HTTP客户端异常，网络连接问题
-        return DllDownloadResult.failure(DllDownloadError.networkError);
-      } on SocketException catch (_) {
-        // Socket异常，网络不可达
-        return DllDownloadResult.failure(DllDownloadError.networkError);
-      } on TimeoutException catch (_) {
-        // 超时，网络问题
-        return DllDownloadResult.failure(DllDownloadError.networkError);
-      }
-    } on FileSystemException catch (_) {
-      // 文件系统错误
-      return DllDownloadResult.failure(DllDownloadError.fileError);
-    } catch (e) {
-      // 其他未知错误，默认视为网络问题
-      return DllDownloadResult.failure(DllDownloadError.networkError);
-    }
-  }
+ 
 
   /// 手动选择DLL文件
   static Future<String?> selectDllFile() async {
@@ -704,34 +504,7 @@ class DllInjector {
     }
   }
 
-  /// 清除DLL缓存
-  /// 删除所有已下载的DLL文件
-  /// 返回删除的文件数量
-  static Future<int> clearDllCache() async {
-    try {
-      final tempDir = Directory.systemTemp;
-      int count = 0;
-      
-      // 列出所有wx_key开头的dll文件
-      await for (final entity in tempDir.list()) {
-        if (entity is File) {
-          final fileName = path.basename(entity.path);
-          if (fileName.startsWith('wx_key-') && fileName.endsWith('.dll')) {
-            try {
-              await entity.delete();
-              count++;
-            } catch (e) {
-              // 忽略单个文件删除失败
-            }
-          }
-        }
-      }
-      
-      return count;
-    } catch (e) {
-      return 0;
-    }
-  }
+
 
   static bool killWeChatProcesses() {
     try {
@@ -845,50 +618,166 @@ class DllInjector {
     return false;
   }
 
-  /// 从候选进程中找到拥有微信窗口的主进程
-  static int? _findMainPidFromCandidates(List<int> candidatePids) {
-    AppLogger.info('开始查找主进程，候选进程: $candidatePids');
-    
-    if (candidatePids.isEmpty) {
-      return null;
-    }
-
-    final enumWindowsProc = Pointer.fromFunction<EnumWindowsProc>(_enumWindowsProc, 0);
-    final pidsPtr = calloc<Pointer<Int32>>();
-    pidsPtr.value = calloc<Int32>(100);
-    
-    // 初始化数组为0
-    for (int i = 0; i < 100; i++) {
-      pidsPtr.value[i] = 0;
-    }
-    
-    try {
-      EnumWindows(enumWindowsProc, pidsPtr.address);
-      
-      final windowPids = <int>[];
-      for (int i = 0; i < 100; i++) {
-        final pid = pidsPtr.value[i];
-        if (pid == 0) break;
-        windowPids.add(pid);
-      }
-      
-      AppLogger.info('找到 ${windowPids.length} 个拥有微信窗口的进程: $windowPids');
-      
-      // 找到既在候选列表中，又有微信窗口的进程
-      for (final pid in candidatePids) {
-        if (windowPids.contains(pid)) {
-          AppLogger.success('成功确定主进程 PID: $pid');
-          return pid;
+  static Future<bool> waitForWeChatWindowComponents({int maxWaitSeconds = 15}) async {
+    final deadline = DateTime.now().add(Duration(seconds: maxWaitSeconds));
+    while (DateTime.now().isBefore(deadline)) {
+      final handles = _findWechatWindowHandles();
+      for (final handle in handles) {
+        final children = _collectChildWindowInfos(handle);
+        _logWechatComponentSnapshot(handle, children);
+        if (_hasReadyComponents(children)) {
+          AppLogger.success('检测到微信界面组件已加载完成');
+          return true;
         }
       }
-      
-      AppLogger.warning('候选进程列表: $candidatePids, 窗口进程列表: $windowPids, 无交集');
-      return null;
-    } finally {
-      free(pidsPtr.value);
-      free(pidsPtr);
+      await Future.delayed(const Duration(milliseconds: 500));
     }
+
+    AppLogger.warning('等待微信界面组件超时或未检测到关键控件');
+    return false;
   }
+
+  static List<int> _findWechatWindowHandles() {
+    final handles = <int>[];
+    _topWindowHandlesCollector = handles;
+    EnumWindows(
+      Pointer.fromFunction<EnumWindowsProc>(_enumWechatTopWindowProc, 0),
+      0,
+    );
+    _topWindowHandlesCollector = null;
+    return handles;
+  }
+
+  static int _enumWechatTopWindowProc(int hWnd, int lParam) {
+    final collector = _topWindowHandlesCollector;
+    if (collector == null) {
+      return 0;
+    }
+
+    if (IsWindowVisible(hWnd) == 0) {
+      return 1;
+    }
+
+    final titleLen = GetWindowTextLength(hWnd);
+    if (titleLen == 0) {
+      return 1;
+    }
+
+    final titleBuffer = calloc<Uint16>(titleLen + 1);
+    GetWindowText(hWnd, titleBuffer.cast(), titleLen + 1);
+    final title = String.fromCharCodes(
+      titleBuffer.cast<Uint16>().asTypedList(titleLen + 1).takeWhile((c) => c != 0),
+    );
+    free(titleBuffer);
+
+    if (title.contains('微信') || title.contains('Weixin')) {
+      collector.add(hWnd);
+    }
+
+    return 1;
+  }
+
+  static List<_ChildWindowInfo> _collectChildWindowInfos(int parentHwnd) {
+    final children = <_ChildWindowInfo>[];
+    _childWindowCollector = children;
+    EnumChildWindows(
+      parentHwnd,
+      Pointer.fromFunction<EnumWindowsProc>(_enumChildWindowProc, 0),
+      0,
+    );
+    _childWindowCollector = null;
+    return children;
+  }
+
+  static int _enumChildWindowProc(int hWnd, int lParam) {
+    final collector = _childWindowCollector;
+    if (collector == null) {
+      return 0;
+    }
+
+    final titleLen = GetWindowTextLength(hWnd);
+    final titleBuffer = calloc<Uint16>(titleLen + 1);
+    String title = '';
+    if (titleLen > 0) {
+      GetWindowText(hWnd, titleBuffer.cast(), titleLen + 1);
+      title = String.fromCharCodes(
+        titleBuffer.cast<Uint16>().asTypedList(titleLen + 1).takeWhile((c) => c != 0),
+      );
+    }
+    free(titleBuffer);
+
+    final classBuffer = calloc<Uint16>(256);
+    final classLen = GetClassName(hWnd, classBuffer.cast(), 256);
+    final className = classLen > 0
+        ? String.fromCharCodes(
+            classBuffer.cast<Uint16>().asTypedList(classLen),
+          )
+        : '';
+    free(classBuffer);
+
+    collector.add(_ChildWindowInfo(hWnd, title.trim(), className.trim()));
+    return 1;
+  }
+
+  static bool _hasReadyComponents(List<_ChildWindowInfo> children) {
+    if (children.isEmpty) {
+      return false;
+    }
+
+    var classMatchCount = 0;
+    var titleMatchCount = 0;
+
+    for (final child in children) {
+      final normalizedTitle = child.title.replaceAll(RegExp(r'\s+'), '');
+      if (normalizedTitle.isNotEmpty) {
+        for (final marker in _readyComponentTexts) {
+          if (normalizedTitle.contains(marker)) {
+            return true;
+          }
+        }
+        titleMatchCount++;
+      }
+
+      final className = child.className;
+      if (className.isNotEmpty) {
+        if (_readyComponentClassMarkers
+            .any((marker) => className.contains(marker))) {
+          return true;
+        }
+        if (className.length > 5) {
+          classMatchCount++;
+        }
+      }
+    }
+
+    if (classMatchCount >= 3 || titleMatchCount >= 2) {
+      return true;
+    }
+
+    return children.length >= _readyChildCountThreshold;
+  }
+
+  static void _logWechatComponentSnapshot(
+      int hwnd, List<_ChildWindowInfo> children) {
+    if (children.isEmpty) {
+      AppLogger.info('微信窗口 $hwnd 尚未枚举到子窗口');
+      return;
+    }
+
+    final snapshot = children
+        .take(6)
+        .map((child) {
+          final title = child.title.isEmpty ? '<空标题>' : child.title;
+          final cls = child.className.isEmpty ? '<无类名>' : child.className;
+          return '$cls:$title';
+        })
+        .join(' | ');
+
+    AppLogger.info(
+      '微信窗口 $hwnd 子窗口(${children.length}) 快照: $snapshot',
+    );
+  }
+
 
   static int? findMainWeChatPid() {
     final enumWindowsProc = Pointer.fromFunction<EnumWindowsProc>(_enumWindowsProc, 0);
@@ -935,7 +824,7 @@ class DllInjector {
         );
         free(titleBuffer);
         
-        if (title.contains('微信') || title.contains('WeChat')) {
+        if (title.contains('微信') || title.contains('Weixin')) {
           final pidsPtr = Pointer<Pointer<Int32>>.fromAddress(lParam);
           final pids = pidsPtr.value;
           for (int i = 0; i < 100; i++) {
@@ -977,4 +866,10 @@ class DllInjector {
   }
 }
 
+class _ChildWindowInfo {
+  _ChildWindowInfo(this.hwnd, this.title, this.className);
 
+  final int hwnd;
+  final String title;
+  final String className;
+}

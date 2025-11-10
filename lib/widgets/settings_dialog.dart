@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'dart:io';
 import '../services/key_storage.dart';
-import '../services/dll_injector.dart';
 import '../services/app_logger.dart';
 
 /// 设置弹窗页面
@@ -21,7 +20,6 @@ class SettingsDialog extends StatefulWidget {
 class _SettingsDialogState extends State<SettingsDialog> {
   String? _currentWechatDir;
   String? _logFileSize;
-  bool _isLoading = false;
 
   @override
   void initState() {
@@ -86,44 +84,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
     }
   }
 
-  Future<void> _clearDllCache() async {
-    final confirmed = await _showConfirmDialog(
-      title: '确认清除DLL缓存',
-      content: '这将删除所有已下载的DLL文件，下次使用时需要重新下载。\n是否继续？',
-    );
-
-    if (!confirmed) return;
-
-    setState(() {
-      _isLoading = true;
-    });
-
-    try {
-      await AppLogger.info('用户请求清除DLL缓存');
-      final count = await DllInjector.clearDllCache();
-      
-      if (mounted) {
-        if (count > 0) {
-          _showMessage('成功清除 $count 个DLL文件');
-          await AppLogger.success('清除了 $count 个DLL缓存文件');
-        } else {
-          _showMessage('没有可清除的DLL缓存');
-          await AppLogger.info('没有可清除的DLL缓存');
-        }
-      }
-    } catch (e, stackTrace) {
-      await AppLogger.error('清除DLL缓存时出错', e, stackTrace);
-      if (mounted) {
-        _showMessage('清除缓存失败: $e', isError: true);
-      }
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isLoading = false;
-        });
-      }
-    }
-  }
+  
 
   Future<void> _openLogFile() async {
     try {
@@ -311,26 +272,6 @@ class _SettingsDialogState extends State<SettingsDialog> {
                       title: '选择微信目录',
                       subtitle: _currentWechatDir ?? '未设置（将自动检测）',
                       onTap: _selectWechatDirectory,
-                    ),
-                    
-                    const SizedBox(height: 24),
-                    
-                    // DLL缓存管理
-                    _buildSectionTitle('DLL缓存管理'),
-                    const SizedBox(height: 12),
-                    _buildSettingCard(
-                      icon: Icons.delete_outline,
-                      iconColor: Colors.orange,
-                      title: '清除DLL缓存',
-                      subtitle: '删除已下载的DLL文件',
-                      onTap: _isLoading ? null : _clearDllCache,
-                      trailing: _isLoading
-                          ? const SizedBox(
-                              width: 20,
-                              height: 20,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : null,
                     ),
                     
                     const SizedBox(height: 24),

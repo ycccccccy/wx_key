@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
 import 'dart:io';
@@ -724,11 +724,11 @@ class _MyHomePageState extends State<MyHomePage>
 
     setState(() {
       _isLoading = true;
-      _statusMessage = '准备开始自动注入...';
+      _statusMessage = '准备开始获取密钥...';
       _statusLevel = 'INFO';
     });
-    _addLogMessage('INFO', '准备开始自动注入...');
-    await AppLogger.info('用户开始自动注入流程，微信版本: $_wechatVersion');
+    _addLogMessage('INFO', '准备开始获取密钥...');
+    await AppLogger.info('用户开始获取密钥流程，微信版本: $_wechatVersion');
 
     try {
       // 1. 准备内置DLL
@@ -833,19 +833,33 @@ class _MyHomePageState extends State<MyHomePage>
         return;
       }
 
-      // 5. 延迟几秒，等待微信完全初始化
-      _addLogMessage('INFO', '等待微信完全启动，请不要点击微信任何按键');
+      // 5. 检测微信界面组件，确认窗口加载完成
+      _addLogMessage('INFO', '正在检测微信窗口组件，确保界面加载完整');
       setState(() {
-        _statusMessage = '等待微信完全启动...请不要点击微信任何按键';
+        _statusMessage = '检测微信界面组件...';
         _statusLevel = 'INFO';
       });
-      for (int i = 5; i > 0; i--) {
+
+      final componentsReady =
+          await DllInjector.waitForWeChatWindowComponents(maxWaitSeconds: 15);
+
+      if (!componentsReady) {
+        _addLogMessage('ERROR', '未检测到微信界面关键组件，微信可能尚未完成加载');
+        await AppLogger.error('微信界面组件检测超时');
         setState(() {
-          _statusMessage = '等待微信完全启动... ($i秒)，请不要点击微信任何按键';
-          _statusLevel = 'INFO';
+          _statusMessage = '微信界面组件未准备好，获取密钥已停止';
+          _statusLevel = 'ERROR';
         });
-        await Future.delayed(const Duration(seconds: 1));
+        await _cleanupResources();
+        return;
       }
+
+      _addLogMessage('SUCCESS', '微信界面组件已加载完成');
+      setState(() {
+        _statusMessage = '微信界面组件已就绪，继续注入';
+        _statusLevel = 'INFO';
+      });
+
 
       // 6. 初始化远程Hook控制器（新架构）
       _addLogMessage('INFO', '正在初始化远程Hook控制器...');
@@ -935,10 +949,10 @@ class _MyHomePageState extends State<MyHomePage>
         await _cleanupResources();
       }
     } catch (e, stackTrace) {
-      _addLogMessage('ERROR', '自动注入过程出错: $e');
-      await AppLogger.error('自动注入过程出错', e, stackTrace);
+      _addLogMessage('ERROR', '获取密钥过程出错: $e');
+      await AppLogger.error('获取密钥过程出错', e, stackTrace);
       setState(() {
-        _statusMessage = '自动注入失败: $e';
+        _statusMessage = '获取密钥失败: $e';
         _statusLevel = 'ERROR';
       });
       // 出错时停止日志监控并清理资源
