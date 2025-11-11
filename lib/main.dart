@@ -505,29 +505,37 @@ class _MyHomePageState extends State<MyHomePage>
     exit(0);
   }
 
-  /// 清理所有资源
+  /// æ¸çææèµæº
   Future<void> _cleanupResources() async {
-    print('[清理] 开始清理资源...');
+    print('[æ¸ç] å¼å§æ¸çèµæº...');
 
-    // 停止状态轮询
+    // åæ­¢ç¶æè½®è¯¢
     _isPolling = false;
-    print('[清理] 状态轮询已停止');
+    print('[æ¸ç] ç¶æè½®è¯¢å·²åæ­¢');
 
-    // 卸载远程Hook
+    // å¸è½½è¿ç¨ Hook
     if (_isDllInjected) {
-      print('[清理] 开始卸载远程Hook...');
+      print('[æ¸ç] å¼å§å¸è½½è¿ç¨Hook...');
       RemoteHookController.uninstallHook();
-      print('[清理] 远程Hook已卸载');
+      print('[æ¸ç] è¿ç¨Hookå·²å¸è½½');
     }
 
-    // 取消日志流订阅
+    // åæ¶æ¥å¿æµè®¢é
     await _logStreamSubscription?.cancel();
     _logStreamSubscription = null;
-    print('[清理] 日志流订阅已取消');
+    print('[æ¸ç] æ¥å¿æµè®¢éå·²åæ¶');
 
-    // 等待一小段时间确保完全退出
+    // ç¨ç­çå»ï¼ç¡®ä¿åå°çº¿ç¨ç»æ
     await Future.delayed(const Duration(milliseconds: 300));
-    print('[清理] 资源清理完成');
+    print('[æ¸ç] èµæºæ¸çå®æ');
+
+    if (mounted) {
+      setState(() {
+        _isDllInjected = false;
+        _isLoading = false;
+        _isGettingImageKey = false;
+      });
+    }
   }
 
   /// 加载保存的数据
@@ -1672,15 +1680,12 @@ class _MyHomePageState extends State<MyHomePage>
   }
 
   Widget _buildImageKeyButton() {
-    final bool isBusy = _isGettingImageKey || _isLoading;
-    final bool isImageTask = _isGettingImageKey;
-    final String labelText = isImageTask
-        ? '正在获取图片密钥...'
-        : _isLoading
-            ? '等待数据库密钥完成'
-            : '获取图片密钥';
+    final bool isBusy = _isGettingImageKey;
+    final bool canDisplayButton = !_isLoading && !_isDllInjected;
+    final String labelText = isBusy ? '正在获取图片密钥...' : '获取图片密钥';
 
-    return Container(
+    final button = Container(
+      key: const ValueKey('image-key-button'),
       width: double.infinity,
       height: 48,
       decoration: BoxDecoration(
@@ -1693,28 +1698,9 @@ class _MyHomePageState extends State<MyHomePage>
           ),
         ],
       ),
-      child: ElevatedButton.icon(
+      child: ElevatedButton(
         onPressed: isBusy ? null : _getImageKeys,
-        icon: AnimatedSwitcher(
-          duration: const Duration(milliseconds: 200),
-          child: isBusy
-              ? SizedBox(
-                  key: const ValueKey('image-key-loading'),
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    valueColor:
-                        AlwaysStoppedAnimation<Color>(Colors.white),
-                  ),
-                )
-              : const Icon(
-                  Icons.image_outlined,
-                  key: ValueKey('image-key-icon'),
-                  size: 18,
-                ),
-        ),
-        label: Text(
+        child: Text(
           labelText,
           style: const TextStyle(
             fontSize: 14,
@@ -1735,6 +1721,15 @@ class _MyHomePageState extends State<MyHomePage>
           ),
         ),
       ),
+    );
+
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 250),
+      switchInCurve: Curves.easeOut,
+      switchOutCurve: Curves.easeIn,
+      child: canDisplayButton
+          ? button
+          : const SizedBox.shrink(key: ValueKey('image-key-hidden')),
     );
   }
 

@@ -31,6 +31,7 @@ enum DllDownloadError {
 class DllInjector {
   static List<int>? _topWindowHandlesCollector;
   static List<_ChildWindowInfo>? _childWindowCollector;
+  static int? _topWindowTargetPid;
   static const List<String> _readyComponentTexts = [
     '聊天',
     '登录',
@@ -621,12 +622,18 @@ class DllInjector {
   static Future<bool> waitForWeChatWindowComponents({int maxWaitSeconds = 15}) async {
     final deadline = DateTime.now().add(Duration(seconds: maxWaitSeconds));
     while (DateTime.now().isBefore(deadline)) {
-      final handles = _findWechatWindowHandles();
+      final mainPid = findMainWeChatPid();
+      if (mainPid == null) {
+        await Future.delayed(const Duration(milliseconds: 500));
+        continue;
+      }
+
+      final handles = _findWechatWindowHandles(targetPid: mainPid);
       for (final handle in handles) {
         final children = _collectChildWindowInfos(handle);
         _logWechatComponentSnapshot(handle, children);
         if (_hasReadyComponents(children)) {
-          AppLogger.success('检测到微信界面组件已加载完成');
+          AppLogger.success('检测到微信界面组件已加载完毕');
           return true;
         }
       }
@@ -637,19 +644,22 @@ class DllInjector {
     return false;
   }
 
-  static List<int> _findWechatWindowHandles() {
+  static List<int> _findWechatWindowHandles({required int targetPid}) {
     final handles = <int>[];
     _topWindowHandlesCollector = handles;
+    _topWindowTargetPid = targetPid;
     EnumWindows(
       Pointer.fromFunction<EnumWindowsProc>(_enumWechatTopWindowProc, 0),
       0,
     );
     _topWindowHandlesCollector = null;
+    _topWindowTargetPid = null;
     return handles;
   }
 
   static int _enumWechatTopWindowProc(int hWnd, int lParam) {
     final collector = _topWindowHandlesCollector;
+    final targetPid = _topWindowTargetPid;
     if (collector == null) {
       return 0;
     }
@@ -670,9 +680,25 @@ class DllInjector {
     );
     free(titleBuffer);
 
-    if (title.contains('微信') || title.contains('Weixin')) {
-      collector.add(hWnd);
+    final normalizedTitle = title.trim();
+    final normalizedTitleLower = normalizedTitle.toLowerCase();
+    final isWeChatTitle = normalizedTitle == '微信' ||
+        normalizedTitleLower == 'wechat' ||
+        normalizedTitleLower == 'weixin';
+    if (!isWeChatTitle) {
+      return 1;
     }
+
+    final pidPtr = calloc<DWORD>();
+    GetWindowThreadProcessId(hWnd, pidPtr);
+    final windowPid = pidPtr.value;
+    free(pidPtr);
+
+    if (targetPid != null && windowPid != targetPid) {
+      return 1;
+    }
+
+    collector.add(hWnd);
 
     return 1;
   }
