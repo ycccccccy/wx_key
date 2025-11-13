@@ -2,6 +2,8 @@
 #include "../include/syscalls.h"
 #include "../include/string_obfuscator.h"
 #include <Psapi.h>
+#include <array>
+#include <exception>
 #include <sstream>
 
 #pragma comment(lib, "Psapi.lib")
@@ -11,28 +13,49 @@
 std::vector<WeChatVersionConfig> VersionConfigManager::configs;
 bool VersionConfigManager::initialized = false;
 
+namespace {
+    using VersionArray = std::array<int, 4>;
+
+    bool ParseVersionString(const std::string& version, VersionArray& outParts) {
+        outParts.fill(0);
+        std::stringstream ss(version);
+        std::string segment;
+        size_t index = 0;
+
+        while (std::getline(ss, segment, '.') && index < outParts.size()) {
+            try {
+                outParts[index++] = std::stoi(segment);
+            } catch (const std::exception&) {
+                return false;
+            }
+        }
+
+        return index > 0;
+    }
+
+    int CompareVersions(const VersionArray& lhs, const VersionArray& rhs) {
+        for (size_t i = 0; i < lhs.size(); ++i) {
+            if (lhs[i] < rhs[i]) return -1;
+            if (lhs[i] > rhs[i]) return 1;
+        }
+        return 0;
+    }
+}
+
 void VersionConfigManager::InitializeConfigs() {
     if (initialized) return;
-    
-    // 微信 4.1.4.x 配置
+
+    // 微信 4.1.4 及以上配置（含 4.1.4.x、4.1.5.x 等）
     configs.push_back(WeChatVersionConfig(
-        "4.1.4.",
+        ">=4.1.4",
         {0x24, 0x08, 0x48, 0x89, 0x6c, 0x24, 0x10, 0x48, 0x89, 0x74, 0x00, 0x18, 0x48, 0x89, 0x7c, 0x00, 0x20, 0x41, 0x56, 0x48, 0x83, 0xec, 0x50, 0x41},
         "xxxxxxxxxx?xxxx?xxxxxxxx",
         -3
     ));
-    
-    // 微信 4.1.x.x （除 4.1.4.x）通用配置
-    configs.push_back(WeChatVersionConfig(
-        "4.1.",
-        {0x24, 0x50, 0x48, 0xc7, 0x45, 0x00, 0xfe, 0xff, 0xff, 0xff, 0x44, 0x89, 0xcf, 0x44, 0x89, 0xc3, 0x49, 0x89, 0xd6, 0x48, 0x89, 0xce, 0x48, 0x89},
-        "xxxxxxxxxxxxxxxxxxxxxxxx",
-        -0xf
-    ));
 
-    // 微信 4.0.x.x 通用配置
+    // 微信 4.1.4 以下（含 4.1.0-4.1.3 与 4.0.x）的通用配置
     configs.push_back(WeChatVersionConfig(
-        "4.0.",
+        "<4.1.4",
         {0x24, 0x50, 0x48, 0xc7, 0x45, 0x00, 0xfe, 0xff, 0xff, 0xff, 0x44, 0x89, 0xcf, 0x44, 0x89, 0xc3, 0x49, 0x89, 0xd6, 0x48, 0x89, 0xce, 0x48, 0x89},
         "xxxxxxxxxxxxxxxxxxxxxxxx",
         -0xf
@@ -43,13 +66,27 @@ void VersionConfigManager::InitializeConfigs() {
 
 const WeChatVersionConfig* VersionConfigManager::GetConfigForVersion(const std::string& version) {
     InitializeConfigs();
-    
-    for (const auto& config : configs) {
-        if (version.find(config.version) == 0) {
-            return &config;
-        }
+
+    if (configs.size() < 2 || version.empty()) {
+        return nullptr;
     }
-    
+
+    VersionArray parsedVersion;
+    if (!ParseVersionString(version, parsedVersion)) {
+        return nullptr;
+    }
+
+    constexpr VersionArray baseline414 = {4, 1, 4, 0};
+
+    if (CompareVersions(parsedVersion, baseline414) >= 0) {
+        return &configs[0];
+    }
+
+    if ((parsedVersion[0] == 4 && parsedVersion[1] == 1 && parsedVersion[2] < 4) ||
+        (parsedVersion[0] == 4 && parsedVersion[1] == 0)) {
+        return &configs[1];
+    }
+
     return nullptr;
 }
 

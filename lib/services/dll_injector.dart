@@ -31,6 +31,7 @@ enum DllDownloadError {
 class DllInjector {
   static List<int>? _topWindowHandlesCollector;
   static List<_ChildWindowInfo>? _childWindowCollector;
+  static int? _childWindowDepthBase;
   static int? _topWindowTargetPid;
   static const List<String> _readyComponentTexts = [
     '聊天',
@@ -47,8 +48,10 @@ class DllInjector {
     'BrowserWnd',
     'ListView',
     '#32770',
+    'MMUIRenderSubWindowHW',
   ];
-  static const int _readyChildCountThreshold = 14;
+  static const int _readyChildCountThreshold = 8;
+  static const int _maxChildTraversalDepth = 3;
 
   static List<int> findProcessIds(String processName) {
     final pidsFound = <int>[];
@@ -630,7 +633,7 @@ class DllInjector {
 
       final handles = _findWechatWindowHandles(targetPid: mainPid);
       for (final handle in handles) {
-        final children = _collectChildWindowInfos(handle);
+        final children = _collectChildWindowInfosDeep(handle);
         _logWechatComponentSnapshot(handle, children);
         if (_hasReadyComponents(children)) {
           AppLogger.success('检测到微信界面组件已加载完毕');
@@ -703,16 +706,42 @@ class DllInjector {
     return 1;
   }
 
-  static List<_ChildWindowInfo> _collectChildWindowInfos(int parentHwnd) {
+  static List<_ChildWindowInfo> _collectChildWindowInfos(int parentHwnd, {int depth = 0}) {
     final children = <_ChildWindowInfo>[];
     _childWindowCollector = children;
+    _childWindowDepthBase = depth;
     EnumChildWindows(
       parentHwnd,
       Pointer.fromFunction<EnumWindowsProc>(_enumChildWindowProc, 0),
       0,
     );
     _childWindowCollector = null;
+    _childWindowDepthBase = null;
     return children;
+  }
+
+  static List<_ChildWindowInfo> _collectChildWindowInfosDeep(int parentHwnd) {
+    final allChildren = <_ChildWindowInfo>[];
+    final queue = <_WindowTraversalTask>[_WindowTraversalTask(parentHwnd, 0)];
+    final visited = <int>{parentHwnd};
+
+    while (queue.isNotEmpty) {
+      final task = queue.removeAt(0);
+      if (task.depth >= _maxChildTraversalDepth) {
+        continue;
+      }
+
+      final directChildren = _collectChildWindowInfos(task.hwnd, depth: task.depth);
+      for (final child in directChildren) {
+        allChildren.add(child);
+        if (!visited.contains(child.hwnd)) {
+          visited.add(child.hwnd);
+          queue.add(_WindowTraversalTask(child.hwnd, child.depth));
+        }
+      }
+    }
+
+    return allChildren;
   }
 
   static int _enumChildWindowProc(int hWnd, int lParam) {
@@ -720,6 +749,7 @@ class DllInjector {
     if (collector == null) {
       return 0;
     }
+    final depthBase = _childWindowDepthBase ?? 0;
 
     final titleLen = GetWindowTextLength(hWnd);
     final titleBuffer = calloc<Uint16>(titleLen + 1);
@@ -741,7 +771,14 @@ class DllInjector {
         : '';
     free(classBuffer);
 
-    collector.add(_ChildWindowInfo(hWnd, title.trim(), className.trim()));
+    collector.add(
+      _ChildWindowInfo(
+        hWnd,
+        title.trim(),
+        className.trim(),
+        depthBase + 1,
+      ),
+    );
     return 1;
   }
 
@@ -752,6 +789,7 @@ class DllInjector {
 
     var classMatchCount = 0;
     var titleMatchCount = 0;
+    var deepControlCount = 0;
 
     for (final child in children) {
       final normalizedTitle = child.title.replaceAll(RegExp(r'\s+'), '');
@@ -774,9 +812,17 @@ class DllInjector {
           classMatchCount++;
         }
       }
+
+      if (child.depth >= 2 && className.isNotEmpty) {
+        deepControlCount++;
+      }
     }
 
     if (classMatchCount >= 3 || titleMatchCount >= 2) {
+      return true;
+    }
+
+    if (deepControlCount >= 4) {
       return true;
     }
 
@@ -795,7 +841,7 @@ class DllInjector {
         .map((child) {
           final title = child.title.isEmpty ? '<空标题>' : child.title;
           final cls = child.className.isEmpty ? '<无类名>' : child.className;
-          return '$cls:$title';
+          return 'D${child.depth}:$cls:$title';
         })
         .join(' | ');
 
@@ -893,9 +939,17 @@ class DllInjector {
 }
 
 class _ChildWindowInfo {
-  _ChildWindowInfo(this.hwnd, this.title, this.className);
+  _ChildWindowInfo(this.hwnd, this.title, this.className, this.depth);
 
   final int hwnd;
   final String title;
   final String className;
+  final int depth;
+}
+
+class _WindowTraversalTask {
+  _WindowTraversalTask(this.hwnd, this.depth);
+
+  final int hwnd;
+  final int depth;
 }

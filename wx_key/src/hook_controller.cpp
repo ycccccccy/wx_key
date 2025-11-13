@@ -36,6 +36,37 @@ namespace {
         int level;
     };
     std::vector<StatusMessage> g_statusQueue;
+
+    std::string WideToUtf8(const std::wstring& wide) {
+        if (wide.empty()) {
+            return std::string();
+        }
+        int sizeNeeded = WideCharToMultiByte(
+            CP_UTF8,
+            0,
+            wide.c_str(),
+            static_cast<int>(wide.size()),
+            nullptr,
+            0,
+            nullptr,
+            nullptr
+        );
+        if (sizeNeeded <= 0) {
+            return std::string();
+        }
+        std::string utf8(sizeNeeded, 0);
+        WideCharToMultiByte(
+            CP_UTF8,
+            0,
+            wide.c_str(),
+            static_cast<int>(wide.size()),
+            reinterpret_cast<LPSTR>(&utf8[0]),
+            sizeNeeded,
+            nullptr,
+            nullptr
+        );
+        return utf8;
+    }
     
     // 生成唯一ID
     std::string GenerateUniqueId(DWORD pid) {
@@ -60,23 +91,24 @@ namespace {
             return std::string();
         }
 
-        LPSTR buffer = nullptr;
-        DWORD length = FormatMessageA(
+        LPWSTR buffer = nullptr;
+        DWORD length = FormatMessageW(
             FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
             nullptr,
             errorCode,
             MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-            reinterpret_cast<LPSTR>(&buffer),
+            reinterpret_cast<LPWSTR>(&buffer),
             0,
             nullptr
         );
 
         std::string message;
         if (length && buffer) {
-            message.assign(buffer, buffer + length);
-            while (!message.empty() && (message.back() == '\r' || message.back() == '\n')) {
-                message.pop_back();
+            std::wstring wideMessage(buffer, length);
+            while (!wideMessage.empty() && (wideMessage.back() == L'\r' || wideMessage.back() == L'\n')) {
+                wideMessage.pop_back();
             }
+            message = WideToUtf8(wideMessage);
         }
 
         if (buffer) {
