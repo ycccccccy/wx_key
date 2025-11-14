@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ffi';
 import 'dart:io';
 import 'dart:typed_data';
@@ -53,77 +54,94 @@ class ImageKeyResult {
 class ImageKeyService {
   /// 获取微信缓存目录
   static Future<String?> getWeChatCacheDirectory() async {
+    final directories = await findWeChatCacheDirectories();
+    if (directories.isEmpty) {
+      return null;
+    }
+    return directories.first;
+  }
+
+  /// 枚举可用的微信缓存目录（支持多个账号）
+  static Future<List<String>> findWeChatCacheDirectories() async {
     try {
       final documentsPath = Platform.environment['USERPROFILE'];
-      
       if (documentsPath == null) {
-        return null;
+        return [];
       }
 
-      final wechatFilesPath = path.join(documentsPath, 'Documents', 'xwechat_files');
-      
+      final wechatFilesPath =
+          path.join(documentsPath, 'Documents', 'xwechat_files');
       final wechatFilesDir = Directory(wechatFilesPath);
 
       if (!await wechatFilesDir.exists()) {
-        return null;
+        return [];
       }
 
-      // 首先尝试原始方式：查找 wxid_* 或其他符合条件的目录
-      await for (var entity in wechatFilesDir.list()) {
-        if (entity is Directory) {
-          final dirName = path.basename(entity.path);
-          
-          // 检查是否是微信账号目录（以wxid_开头，或者符合其他条件）
-          if (dirName.startsWith('wxid_') || 
-              (dirName.length > 5 && 
-               !dirName.toLowerCase().startsWith('all') && 
-               !dirName.toLowerCase().startsWith('applet') &&
-               !dirName.toLowerCase().startsWith('backup') &&
-               !dirName.toLowerCase().startsWith('wmpf'))) {
-            
-            // 不再检查特定的子目录结构，而是检查是否有 *_t.dat 文件
-            try {
-              await for (var file in Directory(entity.path).list(recursive: true)) {
-                if (file is File && path.basename(file.path).endsWith('_t.dat')) {
-                  return entity.path;
-                }
-              }
-            } catch (e) {
-              continue;
-            }
-          }
+      final highConfidence = <String>[];
+      final lowConfidence = <String>[];
+
+      await for (var entity
+          in wechatFilesDir.list(recursive: false, followLinks: false)) {
+        if (entity is! Directory) {
+          continue;
+        }
+
+        final dirName = path.basename(entity.path);
+        if (!_isPotentialAccountDirectory(dirName)) {
+          continue;
+        }
+
+        final hasDbStorage = await _directoryHasDbStorage(entity);
+        final hasImageCache = await _directoryHasImageCache(entity);
+
+        if (hasDbStorage || hasImageCache) {
+          highConfidence.add(entity.path);
+        } else {
+          lowConfidence.add(entity.path);
         }
       }
 
-      // 如果原始方式找不到，使用备选方式：查找包含 db_storage 文件夹的目录
-      await for (var entity in wechatFilesDir.list()) {
-        if (entity is Directory) {
-          final dirName = path.basename(entity.path);
-          
-          // 跳过特定的系统目录
-          if (dirName.toLowerCase().startsWith('all') || 
-              dirName.toLowerCase().startsWith('applet') ||
-              dirName.toLowerCase().startsWith('backup') ||
-              dirName.toLowerCase().startsWith('wmpf')) {
-            continue;
-          }
-          
-          // 检查该目录下是否有 db_storage 文件夹
-          try {
-            final dbStoragePath = path.join(entity.path, 'db_storage');
-            final dbStorageDir = Directory(dbStoragePath);
-            if (await dbStorageDir.exists()) {
-              return entity.path;
-            }
-          } catch (e) {
-            continue;
-          }
-        }
+      if (highConfidence.isNotEmpty) {
+          highConfidence.sort((a, b) => path.basename(a).compareTo(path.basename(b)));
+          return highConfidence;
       }
 
-      return null;
+      lowConfidence.sort((a, b) => path.basename(a).compareTo(path.basename(b)));
+      return lowConfidence;
     } catch (e, _) {
-      return null;
+      return [];
+    }
+  }
+
+  static bool _isPotentialAccountDirectory(String dirName) {
+    final lower = dirName.toLowerCase();
+    if (lower.startsWith('all') ||
+        lower.startsWith('applet') ||
+        lower.startsWith('backup') ||
+        lower.startsWith('wmpf')) {
+      return false;
+    }
+
+    return dirName.startsWith('wxid_') || dirName.length > 5;
+  }
+
+  static Future<bool> _directoryHasDbStorage(Directory directory) async {
+    try {
+      final dbStoragePath = path.join(directory.path, 'db_storage');
+      final dbStorageDir = Directory(dbStoragePath);
+      return await dbStorageDir.exists();
+    } catch (e) {
+      return false;
+    }
+  }
+
+  static Future<bool> _directoryHasImageCache(Directory directory) async {
+    try {
+      final imagePath = path.join(directory.path, 'FileStorage', 'Image');
+      final imageDir = Directory(imagePath);
+      return await imageDir.exists();
+    } catch (e) {
+      return false;
     }
   }
 
@@ -131,18 +149,24 @@ class ImageKeyService {
   static Future<List<File>> _findTemplateDatFiles(String userDir) async {
     final files = <File>[];
     try {
-      
+      const int maxFiles = 32;
       final userDirEntity = Directory(userDir);
       if (!await userDirEntity.exists()) {
         return [];
       }
       
       // 递归搜索所有 *_t.dat 文件
-      await for (var entity in userDirEntity.list(recursive: true)) {
+      await for (var entity in userDirEntity.list(
+        recursive: true,
+        followLinks: false,
+      )) {
         if (entity is File) {
           final fileName = path.basename(entity.path);
           if (fileName.endsWith('_t.dat')) {
             files.add(entity);
+            if (files.length >= maxFiles) {
+              break;
+            }
           }
         }
       }
@@ -282,7 +306,11 @@ class ImageKeyService {
   }
 
   /// 从微信进程内存中搜索AES密钥
-  static Future<String?> _getAesKeyFromMemory(int pid, Uint8List ciphertext) async {
+  static Future<String?> _getAesKeyFromMemory(
+    int pid,
+    Uint8List ciphertext, [
+    void Function(String message)? onProgress,
+  ]) async {
     AppLogger.info('开始内存搜索，目标进程: $pid');
     
     final hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
@@ -294,6 +322,10 @@ class ImageKeyService {
     try {
       final memoryRegions = _getMemoryRegions(hProcess);
       AppLogger.info('找到 ${memoryRegions.length} 个内存区域');
+      final totalRegions = memoryRegions.length;
+      if (totalRegions == 0) {
+        onProgress?.call('未找到可扫描的内存区域');
+      }
 
       var scannedCount = 0;
       var skippedCount = 0;
@@ -309,7 +341,9 @@ class ImageKeyService {
         }
         
         scannedCount++;
-        if (scannedCount % 100 == 0) {
+        if (scannedCount % 10 == 0) {
+          onProgress?.call('正在扫描微信内存... ($scannedCount/$totalRegions)');
+          await Future<void>.delayed(const Duration(milliseconds: 1));
         }
         
         final memory = _readProcessMemory(hProcess, baseAddress, regionSize);
@@ -344,6 +378,7 @@ class ImageKeyService {
             
             if (_verifyKey(ciphertext, keyBytes)) {
               AppLogger.success('在第 $scannedCount 个区域找到AES密钥');
+              onProgress?.call('已找到AES密钥，正在校验...');
               CloseHandle(hProcess);
               return String.fromCharCodes(keyBytes);
             }
@@ -459,9 +494,13 @@ class ImageKeyService {
 
   /// 获取图片密钥（XOR和AES）
   /// [manualDirectory] 可选参数，用户手动选择的目录
-  static Future<ImageKeyResult> getImageKeys({String? manualDirectory}) async {
+  static Future<ImageKeyResult> getImageKeys({
+    String? manualDirectory,
+    void Function(String message)? onProgress,
+  }) async {
     try {
       AppLogger.info('开始获取图片密钥');
+      onProgress?.call('正在定位微信缓存目录...');
       
       String? cacheDir;
       
@@ -480,7 +519,7 @@ class ImageKeyService {
         );
       }
       AppLogger.info('找到缓存目录: $cacheDir');
-
+      onProgress?.call('正在收集模板文件...');
 
       final templateFiles = await _findTemplateDatFiles(cacheDir);
       if (templateFiles.isEmpty) {
@@ -488,6 +527,7 @@ class ImageKeyService {
         return ImageKeyResult.failure('未找到模板文件，可能该微信账号没有图片缓存');
       }
       AppLogger.info('找到 ${templateFiles.length} 个模板文件');
+      onProgress?.call('找到 ${templateFiles.length} 个模板文件，正在计算XOR密钥...');
 
 
       final xorKey = await _getXorKey(templateFiles);
@@ -496,6 +536,7 @@ class ImageKeyService {
         return ImageKeyResult.failure('无法获取XOR密钥');
       }
       AppLogger.info('成功获取XOR密钥: ${xorKey.toRadixString(16).padLeft(2, '0')}');
+      onProgress?.call('XOR密钥获取成功，正在读取加密数据...');
 
 
       final ciphertext = await _getCiphertextFromTemplate(templateFiles);
@@ -504,6 +545,7 @@ class ImageKeyService {
         return ImageKeyResult.failure('无法读取加密数据');
       }
       AppLogger.info('成功读取 ${ciphertext.length} 字节加密数据');
+      onProgress?.call('成功读取加密数据，正在检查微信进程...');
 
 
       final pids = DllInjector.findProcessIds('Weixin.exe');
@@ -512,10 +554,15 @@ class ImageKeyService {
         return ImageKeyResult.failure('微信进程未运行');
       }
       AppLogger.info('找到微信进程 PID: ${pids.first}');
+      onProgress?.call('已定位微信进程，正在扫描内存获取AES密钥...');
 
 
       AppLogger.info('开始从内存中搜索AES密钥');
-      final aesKey = await _getAesKeyFromMemory(pids.first, ciphertext);
+      final aesKey = await _getAesKeyFromMemory(
+        pids.first,
+        ciphertext,
+        onProgress,
+      );
       if (aesKey == null) {
         AppLogger.error('无法从内存中获取AES密钥');
         return ImageKeyResult.failure('无法从内存中获取AES密钥');
@@ -531,4 +578,3 @@ class ImageKeyService {
     }
   } 
 }
-

@@ -445,6 +445,7 @@ class _MyHomePageState extends State<MyHomePage>
   String? _imageAesKey;
   DateTime? _imageKeyTimestamp;
   bool _isGettingImageKey = false;
+  String? _imageKeyProgressMessage;
 
   // 版本和DLL相关
   String? _wechatVersion;
@@ -505,29 +506,23 @@ class _MyHomePageState extends State<MyHomePage>
     exit(0);
   }
 
-  /// æ¸çææèµæº
+  /// 清理所有资源
   Future<void> _cleanupResources() async {
-    print('[æ¸ç] å¼å§æ¸çèµæº...');
 
-    // åæ­¢ç¶æè½®è¯¢
+    // 停止轮询
     _isPolling = false;
-    print('[æ¸ç] ç¶æè½®è¯¢å·²åæ­¢');
 
-    // å¸è½½è¿ç¨ Hook
+    // 卸载远程Hook
     if (_isDllInjected) {
-      print('[æ¸ç] å¼å§å¸è½½è¿ç¨Hook...');
       RemoteHookController.uninstallHook();
-      print('[æ¸ç] è¿ç¨Hookå·²å¸è½½');
     }
 
-    // åæ¶æ¥å¿æµè®¢é
+    // 停止日志流订阅
     await _logStreamSubscription?.cancel();
     _logStreamSubscription = null;
-    print('[æ¸ç] æ¥å¿æµè®¢éå·²åæ¶');
 
-    // ç¨ç­çå»ï¼ç¡®ä¿åå°çº¿ç¨ç»æ
+    // 清理资源
     await Future.delayed(const Duration(milliseconds: 300));
-    print('[æ¸ç] èµæºæ¸çå®æ');
 
     if (mounted) {
       setState(() {
@@ -616,7 +611,6 @@ class _MyHomePageState extends State<MyHomePage>
       });
     } catch (e, stackTrace) {
       await AppLogger.error('启动日志监控失败', e, stackTrace);
-      print('[日志监控] 启动失败: $e');
     }
   }
 
@@ -1043,6 +1037,21 @@ class _MyHomePageState extends State<MyHomePage>
     }
   }
 
+  void _handleImageKeyProgress(String message) {
+    if (_imageKeyProgressMessage == message) {
+      return;
+    }
+    _imageKeyProgressMessage = message;
+    _addLogMessage('INFO', message);
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _statusMessage = message;
+      _statusLevel = 'INFO';
+    });
+  }
+
   /// 获取图片密钥（XOR和AES）
   Future<void> _getImageKeys() async {
     if (_isLoading) {
@@ -1080,11 +1089,52 @@ class _MyHomePageState extends State<MyHomePage>
     });
 
     try {
+      _imageKeyProgressMessage = null;
       _addLogMessage('INFO', '开始获取图片密钥...');
       await AppLogger.info('开始获取图片密钥');
 
+      String? autoSelectedDirectory;
+      final availableDirectories =
+          await ImageKeyService.findWeChatCacheDirectories();
+
+      if (availableDirectories.length == 1) {
+        autoSelectedDirectory = availableDirectories.first;
+        await AppLogger.info('检测到单个微信账号目录，自动使用: $autoSelectedDirectory');
+      } else if (availableDirectories.length > 1) {
+        _addLogMessage('INFO', '检测到多个微信账号目录，等待选择...');
+        await AppLogger.info(
+          '检测到多个微信账号目录: ${availableDirectories.length}',
+        );
+
+        final selectedDirectory =
+            await _showAccountSelectionDialog(availableDirectories);
+
+        if (selectedDirectory == null) {
+          _addLogMessage('WARNING', '已取消选择微信账号目录');
+          await AppLogger.info('用户取消选择微信账号目录');
+          if (mounted) {
+            setState(() {
+              _isGettingImageKey = false;
+              _statusMessage = '已取消选择微信账号目录';
+              _statusLevel = 'WARNING';
+            });
+          }
+          return;
+        }
+
+        autoSelectedDirectory = selectedDirectory;
+        _addLogMessage(
+          'INFO',
+          '已选择账号目录: ${path.basename(autoSelectedDirectory)}',
+        );
+        await AppLogger.info('用户选择的账号目录: $autoSelectedDirectory');
+      }
+
       // 首次尝试自动获取
-      var result = await ImageKeyService.getImageKeys();
+      var result = await ImageKeyService.getImageKeys(
+        manualDirectory: autoSelectedDirectory,
+        onProgress: _handleImageKeyProgress,
+      );
 
       // 如果需要手动选择目录
       if (!result.success && result.needManualSelection) {
@@ -1132,6 +1182,7 @@ class _MyHomePageState extends State<MyHomePage>
         // 使用选择的目录重新获取
         result = await ImageKeyService.getImageKeys(
           manualDirectory: selectedDirectory,
+          onProgress: _handleImageKeyProgress,
         );
       }
 
@@ -1181,6 +1232,7 @@ class _MyHomePageState extends State<MyHomePage>
       setState(() {
         _isGettingImageKey = false;
       });
+      _imageKeyProgressMessage = null;
     }
   }
 
@@ -1245,6 +1297,128 @@ class _MyHomePageState extends State<MyHomePage>
         }
       });
     }
+  }
+
+  Future<String?> _showAccountSelectionDialog(
+      List<String> directories) async {
+    final options = List<String>.from(directories)
+      ..sort(
+        (a, b) => path.basename(a).compareTo(path.basename(b)),
+      );
+    final double listHeight =
+        (options.length * 72.0).clamp(120.0, 360.0).toDouble();
+
+    return showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          title: const Text(
+            '选择微信账号',
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w600,
+              fontFamily: 'HarmonyOS_SansSC',
+            ),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                '检测到多个微信账号目录，请选择使用哪个账号来获取图片密钥。',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontFamily: 'HarmonyOS_SansSC',
+                  height: 1.5,
+                ),
+              ),
+              const SizedBox(height: 16),
+              SizedBox(
+                height: listHeight,
+                child: SingleChildScrollView(
+                  child: Column(
+                    children: [
+                      for (var index = 0; index < options.length; index++) ...[
+                        _buildAccountTile(options[index]),
+                        if (index != options.length - 1)
+                          const SizedBox(height: 8),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text(
+                '取消',
+                style: TextStyle(
+                  color: Colors.grey.shade600,
+                  fontWeight: FontWeight.w500,
+                  fontFamily: 'HarmonyOS_SansSC',
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildAccountTile(String directory) {
+    final accountName = path.basename(directory);
+    return Material(
+      color: Colors.grey.shade50,
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () => Navigator.of(context).pop(directory),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(
+            vertical: 12,
+            horizontal: 14,
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      accountName,
+                      style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        fontFamily: 'HarmonyOS_SansSC',
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      directory,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey.shade600,
+                        fontFamily: 'HarmonyOS_SansSC',
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(
+                Icons.chevron_right,
+                color: Colors.grey.shade500,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   /// 显示确认对话框
