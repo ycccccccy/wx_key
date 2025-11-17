@@ -47,11 +47,15 @@ class DllInjector {
     'MainWnd',
     'BrowserWnd',
     'ListView',
-    '#32770',
     'MMUIRenderSubWindowHW',
   ];
   static const int _readyChildCountThreshold = 8;
   static const int _maxChildTraversalDepth = 3;
+  static const List<String> _singleSurfaceMainWindowClasses = [
+    'WeChatMainWndForPC',
+    'WeChatMainWndForpc',
+  ];
+  static const int _win10SingleSurfaceStableChecks = 8;
 
   static List<int> findProcessIds(String processName) {
     final pidsFound = <int>[];
@@ -624,6 +628,8 @@ class DllInjector {
 
   static Future<bool> waitForWeChatWindowComponents({int maxWaitSeconds = 15}) async {
     final deadline = DateTime.now().add(Duration(seconds: maxWaitSeconds));
+    var singleSurfaceStableCounter = 0;
+
     while (DateTime.now().isBefore(deadline)) {
       final mainPid = findMainWeChatPid();
       if (mainPid == null) {
@@ -632,6 +638,7 @@ class DllInjector {
       }
 
       final handles = _findWechatWindowHandles(targetPid: mainPid);
+      var detectedSingleSurfaceWindow = false;
       for (final handle in handles) {
         final children = _collectChildWindowInfosDeep(handle);
         _logWechatComponentSnapshot(handle, children);
@@ -639,6 +646,25 @@ class DllInjector {
           AppLogger.success('检测到微信界面组件已加载完毕');
           return true;
         }
+
+        if (children.isEmpty) {
+          final className = _getWindowClassName(handle);
+          if (_isLikelySingleSurfaceWechatWindow(className)) {
+            detectedSingleSurfaceWindow = true;
+          }
+        }
+      }
+
+      if (detectedSingleSurfaceWindow) {
+        singleSurfaceStableCounter++;
+        if (singleSurfaceStableCounter >= _win10SingleSurfaceStableChecks) {
+          AppLogger.warning(
+            '未枚举到子窗口，但检测到 Win10 单层渲染窗口，按兼容模式继续执行',
+          );
+          return true;
+        }
+      } else {
+        singleSurfaceStableCounter = 0;
       }
       await Future.delayed(const Duration(milliseconds: 500));
     }
@@ -742,6 +768,32 @@ class DllInjector {
     }
 
     return allChildren;
+  }
+
+  static String _getWindowClassName(int hwnd) {
+    final buffer = calloc<Uint16>(256);
+    try {
+      final length = GetClassName(hwnd, buffer.cast(), 256);
+      if (length <= 0) {
+        return '';
+      }
+      return String.fromCharCodes(
+        buffer.cast<Uint16>().asTypedList(length),
+      ).trim();
+    } finally {
+      free(buffer);
+    }
+  }
+
+  static bool _isLikelySingleSurfaceWechatWindow(String className) {
+    if (className.isEmpty) {
+      return false;
+    }
+    if (_singleSurfaceMainWindowClasses.contains(className)) {
+      return true;
+    }
+    final lower = className.toLowerCase();
+    return lower.contains('wechat') && lower.contains('wnd');
   }
 
   static int _enumChildWindowProc(int hWnd, int lParam) {

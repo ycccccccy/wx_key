@@ -62,3 +62,4 @@ app.*.map.json
 /wx_key/**/*.ipdb
 /wx_key/**/*.iobj
 /wx_key/**/*.log
+.vscode/
