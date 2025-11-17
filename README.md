@@ -30,7 +30,7 @@ Tool for obtaining WeChat database and decrypting cache image keys
 This project is a tool for obtaining WeChat database and decrypting WeChat cache image keys in WeChat 4.0 and above versions.
 
 <p align="center">
-  <img src="app.jpg" alt="应用截图" width="420">
+  <img src="app.jpg" alt="应用截图" width="640">
 </p>
 
 ## 小提示
