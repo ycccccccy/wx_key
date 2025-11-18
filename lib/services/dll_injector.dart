@@ -46,7 +46,6 @@ class DllInjector {
     'MainWnd',
     'BrowserWnd',
     'ListView',
-    '#32770',
   ];
   static const int _readyChildCountThreshold = 14;
 
