@@ -10,12 +10,15 @@ Tool for obtaining WeChat database and decrypting cache image keys
 [![Stars](https://img.shields.io/github/stars/ycccccccy/wx_key?style=flat)](https://github.com/ycccccccy/wx_key/stargazers)
 [![Forks](https://img.shields.io/github/forks/ycccccccy/wx_key?style=flat)](https://github.com/ycccccccy/wx_key/network/members)
 
-
+<p align="center">
+  <img src="app.jpg" alt="应用截图" width="640">
+</p>
 
 </div>
 
-> **重要声明**：本项目仅供技术研究和学习使用，严禁用于任何恶意或非法目的。  
-> 如果这个项目对你有帮助，请给我一个 Star ❤️
+ **重要声明**：本项目仅供技术研究和学习使用，严禁用于任何恶意或非法目的。  
+ 
+ 如果这个项目对你有帮助，请给我一个 Star ❤️
 
 ---
 
@@ -26,23 +29,16 @@ Tool for obtaining WeChat database and decrypting cache image keys
 获取微信数据库密钥和提取缓存图片的解密密钥
 
 
-
-This project is a tool for obtaining WeChat database and decrypting WeChat cache image keys in WeChat 4.0 and above versions.
-
-<p align="center">
-  <img src="app.jpg" alt="应用截图" width="640">
-</p>
-
-## 小提示
+## 小小小提示
 
 如果你对本项目感兴趣，也可以看看我的另一个项目：  
 [EchoTrace - 微信聊天记录导出与分析，年度报告应用](https://github.com/ycccccccy/echotrace)
 
 
 
-## 支持版本
+## 关于支持版本的说明
 
-- 支持所有微信 4.x 版本  
+支持所有微信 4.x 版本  
 - 已实际测试版本：
   - 4.1.5.11
   - 4.1.4.17
@@ -57,7 +53,7 @@ This project is a tool for obtaining WeChat database and decrypting WeChat cache
 ## 快速开始
 
 1. **下载发布版本**
-   - 前往 [Releases](https://github.com/ycccccccy/wx_key/releases) 页面，下载最新的压缩包。
+   - 前往 [Releases](https://github.com/ycccccccy/wx_key/releases) 页面，下载最新的压缩包 `app.zip`。
 2. **运行工具**
    - 解压后运行其中的 `wx_key.exe`，或运行你自行编译得到的可执行文件。
 
@@ -67,7 +63,7 @@ This project is a tool for obtaining WeChat database and decrypting WeChat cache
 
 1. 打开微信并完成登录（登录后尽快执行后续步骤）
 2. 进入朋友圈，点开一张**之前没有点开过**的图片，以触发新的缓存
-3. 回到本工具，执行 “获取密钥”
+3. 回到本工具，执行 “获取图片密钥”
 
 
 
