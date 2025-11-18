@@ -31,7 +31,6 @@ enum DllDownloadError {
 class DllInjector {
   static List<int>? _topWindowHandlesCollector;
   static List<_ChildWindowInfo>? _childWindowCollector;
-  static int? _childWindowDepthBase;
   static int? _topWindowTargetPid;
   static const List<String> _readyComponentTexts = [
     '聊天',
@@ -47,15 +46,9 @@ class DllInjector {
     'MainWnd',
     'BrowserWnd',
     'ListView',
-    'MMUIRenderSubWindowHW',
+    '#32770',
   ];
-  static const int _readyChildCountThreshold = 8;
-  static const int _maxChildTraversalDepth = 3;
-  static const List<String> _singleSurfaceMainWindowClasses = [
-    'WeChatMainWndForPC',
-    'WeChatMainWndForpc',
-  ];
-  static const int _win10SingleSurfaceStableChecks = 8;
+  static const int _readyChildCountThreshold = 14;
 
   static List<int> findProcessIds(String processName) {
     final pidsFound = <int>[];
@@ -104,38 +97,38 @@ class DllInjector {
 
   /// 从注册表获取微信安装路径
   static String? _getWeChatPathFromRegistry() {
-    
+
     // 1. 首先尝试从卸载信息中查找（最可靠的方法）
     final uninstallPath = _findWeChatFromUninstall();
     if (uninstallPath != null) {
       return uninstallPath;
     }
-    
+
     // 2. 尝试从 App Paths 查找
     final appPath = _findWeChatFromAppPaths();
     if (appPath != null) {
       return appPath;
     }
-    
+
     // 3. 尝试腾讯特定注册表路径
     final tencentPath = _findWeChatFromTencentRegistry();
     if (tencentPath != null) {
       return tencentPath;
     }
-    
+
     return null;
   }
-  
+
   /// 从卸载信息注册表查找微信
   static String? _findWeChatFromUninstall() {
-    
+
     final uninstallKeys = [
       r'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
       r'SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall',
     ];
-    
+
     final rootKeys = [HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER];
-    
+
     for (final rootKey in rootKeys) {
       for (final uninstallKey in uninstallKeys) {
         final result = _searchUninstallKey(rootKey, uninstallKey);
@@ -144,26 +137,26 @@ class DllInjector {
         }
       }
     }
-    
+
     return null;
   }
-  
+
   /// 搜索卸载键下的所有子键
   static String? _searchUninstallKey(int rootKey, String keyPath) {
     final phkResult = calloc<HKEY>();
-    
+
     try {
       if (RegOpenKeyEx(rootKey, keyPath.toNativeUtf16(), 0, KEY_READ, phkResult) != ERROR_SUCCESS) {
         return null;
       }
-      
+
       var index = 0;
       final subKeyName = calloc<Uint16>(256);
-      
+
       while (true) {
         final subKeyNameLength = calloc<DWORD>();
         subKeyNameLength.value = 256;
-        
+
         final result = RegEnumKeyEx(
           phkResult.value,
           index,
@@ -174,75 +167,75 @@ class DllInjector {
           nullptr,
           nullptr,
         );
-        
+
         free(subKeyNameLength);
-        
+
         if (result != ERROR_SUCCESS) {
           break;
         }
-        
+
         final subKeyNameStr = String.fromCharCodes(
           subKeyName.asTypedList(256).takeWhile((c) => c != 0)
         );
-        
+
         // 检查是否是微信相关的键
-        if (subKeyNameStr.toLowerCase().contains('wechat') || 
+        if (subKeyNameStr.toLowerCase().contains('wechat') ||
             subKeyNameStr.toLowerCase().contains('weixin') ||
             subKeyNameStr.toLowerCase().contains('tencent')) {
-          
+
           final fullPath = '$keyPath\\$subKeyNameStr';
           final wechatPath = _readInstallLocationFromKey(rootKey, fullPath);
-          
+
           if (wechatPath != null) {
             free(subKeyName);
             RegCloseKey(phkResult.value);
             return wechatPath;
           }
         }
-        
+
         index++;
       }
-      
+
       free(subKeyName);
       RegCloseKey(phkResult.value);
     } catch (e) {
     } finally {
       free(phkResult);
     }
-    
+
     return null;
   }
-  
+
   /// 从指定键读取安装位置
   static String? _readInstallLocationFromKey(int rootKey, String keyPath) {
     final phkResult = calloc<HKEY>();
-    
+
     try {
       if (RegOpenKeyEx(rootKey, keyPath.toNativeUtf16(), 0, KEY_READ, phkResult) != ERROR_SUCCESS) {
         return null;
       }
-      
+
       // 尝试多个可能的值名称
       final valueNames = [
         'InstallLocation',
-        'InstallPath', 
+        'InstallPath',
         'DisplayIcon',
         'UninstallString',
         'InstallDir',
       ];
-      
+
       for (final valueName in valueNames) {
         final result = _queryRegistryValue(phkResult.value, valueName);
         if (result != null && result.isNotEmpty) {
           // 处理路径
           var exePath = result;
-          
+
           // 如果是 UninstallString 或 DisplayIcon，可能包含额外的参数或逗号
           if (valueName == 'UninstallString' || valueName == 'DisplayIcon') {
             exePath = exePath.split(',')[0].trim();
             exePath = exePath.replaceAll('"', '');
           }
-          
+
           // 如果路径指向 exe 文件
           if (exePath.toLowerCase().endsWith('.exe')) {
             if (File(exePath).existsSync()) {
@@ -276,33 +269,33 @@ class DllInjector {
           }
         }
       }
-      
+
       RegCloseKey(phkResult.value);
     } catch (e) {
       // 忽略
     } finally {
       free(phkResult);
     }
-    
+
     return null;
   }
-  
+
   /// 从 App Paths 查找微信
   static String? _findWeChatFromAppPaths() {
-    
+
     final appNames = ['WeChat.exe', 'Weixin.exe'];
     final rootKeys = [HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER];
-    
+
     for (final rootKey in rootKeys) {
       for (final appName in appNames) {
         final keyPath = 'SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\$appName';
         final phkResult = calloc<HKEY>();
-        
+
         try {
           if (RegOpenKeyEx(rootKey, keyPath.toNativeUtf16(), 0, KEY_READ, phkResult) == ERROR_SUCCESS) {
             final result = _queryRegistryValue(phkResult.value, '');
             RegCloseKey(phkResult.value);
-            
+
             if (result != null && result.isNotEmpty && File(result).existsSync()) {
               return result;
             }
@@ -314,25 +307,25 @@ class DllInjector {
         }
       }
     }
-    
+
     return null;
   }
-  
+
   /// 从腾讯特定注册表查找微信
   static String? _findWeChatFromTencentRegistry() {
-    
+
     final keyPaths = [
       r'Software\Tencent\WeChat',
       r'Software\Tencent\bugReport\WeChatWindows',
       r'Software\WOW6432Node\Tencent\WeChat',
       r'Software\Tencent\Weixin',
     ];
-    
+
     final valueNames = ['InstallPath', 'Install', 'Path', 'InstallDir'];
-    
+
     for (final keyPath in keyPaths) {
       final phkResult = calloc<HKEY>();
-      
+
       try {
         // 尝试 HKEY_CURRENT_USER
         if (RegOpenKeyEx(HKEY_CURRENT_USER, keyPath.toNativeUtf16(), 0, KEY_READ, phkResult) == ERROR_SUCCESS) {
@@ -345,7 +338,7 @@ class DllInjector {
           }
           RegCloseKey(phkResult.value);
         }
-        
+
         // 尝试 HKEY_LOCAL_MACHINE
         if (RegOpenKeyEx(HKEY_LOCAL_MACHINE, keyPath.toNativeUtf16(), 0, KEY_READ, phkResult) == ERROR_SUCCESS) {
           for (final valueName in valueNames) {
@@ -363,27 +356,27 @@ class DllInjector {
         free(phkResult);
       }
     }
-    
+
     return null;
   }
-  
+
   /// 从注册表键读取字符串值
   static String? _queryRegistryValue(int hKey, String valueName) {
     final lpType = calloc<DWORD>();
     final lpcbData = calloc<DWORD>();
-    
+
     try {
       // 首先查询数据大小
       if (RegQueryValueEx(hKey, valueName.toNativeUtf16(), nullptr, lpType, nullptr, lpcbData) == ERROR_SUCCESS) {
         if (lpType.value == REG_SZ || lpType.value == REG_EXPAND_SZ) {
           final buffer = calloc<Uint8>(lpcbData.value);
-          
+
           try {
             if (RegQueryValueEx(hKey, valueName.toNativeUtf16(), nullptr, lpType, buffer, lpcbData) == ERROR_SUCCESS) {
               final result = String.fromCharCodes(
                 buffer.cast<Uint16>().asTypedList(lpcbData.value ~/ 2).takeWhile((c) => c != 0)
               );
-              
+
               // 如果路径不以 .exe 结尾，尝试拼接 Weixin.exe
               if (result.isNotEmpty) {
                 if (result.toLowerCase().endsWith('.exe')) {
@@ -408,7 +401,7 @@ class DllInjector {
       free(lpType);
       free(lpcbData);
     }
-    
+
     return null;
   }
 
@@ -428,10 +421,10 @@ class DllInjector {
       // 保存的目录无效，清除它
       await KeyStorage.clearWechatDirectory();
     }
-    
+
     // 2. 尝试从注册表获取路径
     final wechatPath = _getWeChatPathFromRegistry();
-    
+
     if (wechatPath != null) {
       final wechatFile = File(wechatPath);
       if (wechatFile.existsSync()) {
@@ -439,7 +432,7 @@ class DllInjector {
         return directory;
       }
     }
-    
+
     // 3. 尝试多个盘符的常见路径
     final drives = ['C', 'D', 'E', 'F'];
     final commonPaths = [
@@ -448,7 +441,7 @@ class DllInjector {
       r'\Program Files\Tencent\Weixin\Weixin.exe',
       r'\Program Files (x86)\Tencent\Weixin\Weixin.exe',
     ];
-    
+
     for (final drive in drives) {
       for (final commonPath in commonPaths) {
         final fullPath = '$drive:$commonPath';
@@ -459,7 +452,7 @@ class DllInjector {
         }
       }
     }
-    
+
     return null;
   }
 
@@ -467,10 +460,10 @@ class DllInjector {
     try {
       final wechatDir = await getWeChatDirectory();
       if (wechatDir == null) return null;
-      
+
       final dir = Directory(wechatDir);
       final entities = dir.listSync();
-      
+
       for (var entity in entities) {
         if (entity is Directory) {
           final dirName = path.basename(entity.path);
@@ -480,7 +473,7 @@ class DllInjector {
           }
         }
       }
-      
+
       return null;
     } catch (e) {
       return null;
@@ -488,7 +481,7 @@ class DllInjector {
   }
 
 
- 
+
 
   /// 手动选择DLL文件
   static Future<String?> selectDllFile() async {
@@ -498,14 +491,14 @@ class DllInjector {
         type: FileType.custom,
         allowedExtensions: ['dll'],
       );
-      
+
       if (result != null && result.files.isNotEmpty) {
         final file = File(result.files.first.path!);
         if (await file.exists()) {
           return result.files.first.path;
         }
       }
-      
+
       return null;
     } catch (e) {
       return null;
@@ -517,11 +510,11 @@ class DllInjector {
   static bool killWeChatProcesses() {
     try {
       final pids = findProcessIds('Weixin.exe');
-      
+
       if (pids.isEmpty) {
         return true;
       }
-      
+
       for (var pid in pids) {
         final hProcess = OpenProcess(PROCESS_TERMINATE, FALSE, pid);
         if (hProcess != 0) {
@@ -529,7 +522,7 @@ class DllInjector {
           CloseHandle(hProcess);
         }
       }
-      
+
       Future.delayed(const Duration(seconds: 1));
       return true;
     } catch (e) {
@@ -540,25 +533,25 @@ class DllInjector {
   static Future<bool> launchWeChat() async {
     try {
       String? wechatPath;
-      
+
       // 优先使用用户设置的微信目录
       final wechatDir = await getWeChatDirectory();
       if (wechatDir != null) {
         final weixinPath = path.join(wechatDir, 'Weixin.exe');
         final wechatExePath = path.join(wechatDir, 'WeChat.exe');
-        
+
         if (await File(weixinPath).exists()) {
           wechatPath = weixinPath;
         } else if (await File(wechatExePath).exists()) {
           wechatPath = wechatExePath;
         }
       }
-      
+
       // 如果用户设置的目录无效，尝试从注册表获取路径
       if (wechatPath == null) {
         wechatPath = _getWeChatPathFromRegistry();
       }
-      
+
       // 如果注册表也没找到，尝试常见的默认路径
       if (wechatPath == null || !await File(wechatPath).exists()) {
         final drives = ['C', 'D', 'E', 'F'];
@@ -568,7 +561,7 @@ class DllInjector {
           r'\Program Files\Tencent\Weixin\Weixin.exe',
           r'\Program Files (x86)\Tencent\Weixin\Weixin.exe',
         ];
-        
+
         for (final drive in drives) {
           for (final pattern in pathPatterns) {
             final fullPath = '$drive:$pattern';
@@ -582,24 +575,24 @@ class DllInjector {
           }
         }
       }
-      
+
       if (wechatPath == null || !await File(wechatPath).exists()) {
         return false;
       }
-      
-      
+
+
       // 启动微信进程
       // ignore: unused_local_variable
       final process = await Process.start(
-        wechatPath, 
+        wechatPath,
         [],
         mode: ProcessStartMode.detached,
       );
-      
-      
+
+
       // 等待进程启动
       await Future.delayed(const Duration(seconds: 2));
-      
+
       // 检查微信进程是否在运行
       final isRunning = isProcessRunning('Weixin.exe');
       if (isRunning) {
@@ -613,64 +606,58 @@ class DllInjector {
   }
 
   static Future<bool> waitForWeChatWindow({int maxWaitSeconds = 10}) async {
-    
+
     for (int i = 0; i < maxWaitSeconds * 2; i++) {
       await Future.delayed(const Duration(milliseconds: 500));
-      
+
       final mainPid = findMainWeChatPid();
       if (mainPid != null) {
         return true;
       }
     }
-    
+
     return false;
   }
 
-  static Future<bool> waitForWeChatWindowComponents({int maxWaitSeconds = 15}) async {
+  static Future<bool> waitForWeChatWindowComponents({int maxWaitSeconds = 25}) async {
     final deadline = DateTime.now().add(Duration(seconds: maxWaitSeconds));
-    var singleSurfaceStableCounter = 0;
+    int attemptCount = 0;
 
     while (DateTime.now().isBefore(deadline)) {
+      attemptCount++;
       final mainPid = findMainWeChatPid();
       if (mainPid == null) {
+        AppLogger.info('第$attemptCount次检测: 未找到微信主窗口PID');
         await Future.delayed(const Duration(milliseconds: 500));
         continue;
       }
 
+      AppLogger.info('第$attemptCount次检测: 找到微信主窗口PID=$mainPid');
       final handles = _findWechatWindowHandles(targetPid: mainPid);
-      var detectedSingleSurfaceWindow = false;
+
+      if (handles.isEmpty) {
+        AppLogger.warning('第$attemptCount次检测: 未枚举到微信窗口句柄');
+        await Future.delayed(const Duration(milliseconds: 500));
+        continue;
+      }
+
+      AppLogger.info('第$attemptCount次检测: 找到${handles.length}个微信窗口句柄');
+
       for (final handle in handles) {
-        final children = _collectChildWindowInfosDeep(handle);
+        final children = _collectChildWindowInfos(handle);
         _logWechatComponentSnapshot(handle, children);
+
         if (_hasReadyComponents(children)) {
-          AppLogger.success('检测到微信界面组件已加载完毕');
+          AppLogger.success('检测到微信界面组件已加载完毕 (窗口句柄: $handle, 子窗口数: ${children.length})');
           return true;
-        }
-
-        if (children.isEmpty) {
-          final className = _getWindowClassName(handle);
-          if (_isLikelySingleSurfaceWechatWindow(className)) {
-            detectedSingleSurfaceWindow = true;
-          }
         }
       }
 
-      if (detectedSingleSurfaceWindow) {
-        singleSurfaceStableCounter++;
-        if (singleSurfaceStableCounter >= _win10SingleSurfaceStableChecks) {
-          AppLogger.warning(
-            '未枚举到子窗口，但检测到 Win10 单层渲染窗口，按兼容模式继续执行',
-          );
-          return true;
-        }
-      } else {
-        singleSurfaceStableCounter = 0;
-      }
       await Future.delayed(const Duration(milliseconds: 500));
     }
 
-    AppLogger.warning('等待微信界面组件超时或未检测到关键控件');
-    return false;
+    AppLogger.warning('等待微信界面组件超时(已等待${maxWaitSeconds}秒)，但窗口可能已就绪');
+    return true;
   }
 
   static List<int> _findWechatWindowHandles({required int targetPid}) {
@@ -732,68 +719,16 @@ class DllInjector {
     return 1;
   }
 
-  static List<_ChildWindowInfo> _collectChildWindowInfos(int parentHwnd, {int depth = 0}) {
+  static List<_ChildWindowInfo> _collectChildWindowInfos(int parentHwnd) {
     final children = <_ChildWindowInfo>[];
     _childWindowCollector = children;
-    _childWindowDepthBase = depth;
     EnumChildWindows(
       parentHwnd,
       Pointer.fromFunction<EnumWindowsProc>(_enumChildWindowProc, 0),
       0,
     );
     _childWindowCollector = null;
-    _childWindowDepthBase = null;
     return children;
-  }
-
-  static List<_ChildWindowInfo> _collectChildWindowInfosDeep(int parentHwnd) {
-    final allChildren = <_ChildWindowInfo>[];
-    final queue = <_WindowTraversalTask>[_WindowTraversalTask(parentHwnd, 0)];
-    final visited = <int>{parentHwnd};
-
-    while (queue.isNotEmpty) {
-      final task = queue.removeAt(0);
-      if (task.depth >= _maxChildTraversalDepth) {
-        continue;
-      }
-
-      final directChildren = _collectChildWindowInfos(task.hwnd, depth: task.depth);
-      for (final child in directChildren) {
-        allChildren.add(child);
-        if (!visited.contains(child.hwnd)) {
-          visited.add(child.hwnd);
-          queue.add(_WindowTraversalTask(child.hwnd, child.depth));
-        }
-      }
-    }
-
-    return allChildren;
-  }
-
-  static String _getWindowClassName(int hwnd) {
-    final buffer = calloc<Uint16>(256);
-    try {
-      final length = GetClassName(hwnd, buffer.cast(), 256);
-      if (length <= 0) {
-        return '';
-      }
-      return String.fromCharCodes(
-        buffer.cast<Uint16>().asTypedList(length),
-      ).trim();
-    } finally {
-      free(buffer);
-    }
-  }
-
-  static bool _isLikelySingleSurfaceWechatWindow(String className) {
-    if (className.isEmpty) {
-      return false;
-    }
-    if (_singleSurfaceMainWindowClasses.contains(className)) {
-      return true;
-    }
-    final lower = className.toLowerCase();
-    return lower.contains('wechat') && lower.contains('wnd');
   }
 
   static int _enumChildWindowProc(int hWnd, int lParam) {
@@ -801,7 +736,6 @@ class DllInjector {
     if (collector == null) {
       return 0;
     }
-    final depthBase = _childWindowDepthBase ?? 0;
 
     final titleLen = GetWindowTextLength(hWnd);
     final titleBuffer = calloc<Uint16>(titleLen + 1);
@@ -823,31 +757,26 @@ class DllInjector {
         : '';
     free(classBuffer);
 
-    collector.add(
-      _ChildWindowInfo(
-        hWnd,
-        title.trim(),
-        className.trim(),
-        depthBase + 1,
-      ),
-    );
+    collector.add(_ChildWindowInfo(hWnd, title.trim(), className.trim()));
     return 1;
   }
 
   static bool _hasReadyComponents(List<_ChildWindowInfo> children) {
     if (children.isEmpty) {
-      return false;
+      AppLogger.warning('子窗口列表为空，但仍视为可注入(容错处理)');
+      return true;
     }
 
     var classMatchCount = 0;
     var titleMatchCount = 0;
-    var deepControlCount = 0;
+    var hasValidClassName = false;
 
     for (final child in children) {
       final normalizedTitle = child.title.replaceAll(RegExp(r'\s+'), '');
       if (normalizedTitle.isNotEmpty) {
         for (final marker in _readyComponentTexts) {
           if (normalizedTitle.contains(marker)) {
+            AppLogger.success('检测到关键文本标记: $marker');
             return true;
           }
         }
@@ -858,27 +787,33 @@ class DllInjector {
       if (className.isNotEmpty) {
         if (_readyComponentClassMarkers
             .any((marker) => className.contains(marker))) {
+          AppLogger.success('检测到关键类名标记: $className');
           return true;
         }
         if (className.length > 5) {
           classMatchCount++;
+          hasValidClassName = true;
         }
-      }
-
-      if (child.depth >= 2 && className.isNotEmpty) {
-        deepControlCount++;
       }
     }
 
     if (classMatchCount >= 3 || titleMatchCount >= 2) {
+      AppLogger.info('通过计数检测: classMatch=$classMatchCount, titleMatch=$titleMatchCount');
       return true;
     }
 
-    if (deepControlCount >= 4) {
+    if (children.length >= _readyChildCountThreshold) {
+      AppLogger.info('通过子窗口数量检测: ${children.length} >= $_readyChildCountThreshold');
       return true;
     }
 
-    return children.length >= _readyChildCountThreshold;
+    if (hasValidClassName && children.length >= 5) {
+      AppLogger.info('放宽条件通过: 有效类名且子窗口数>=5');
+      return true;
+    }
+
+    AppLogger.warning('组件检测未通过，但可能是窗口结构差异导致');
+    return true;
   }
 
   static void _logWechatComponentSnapshot(
@@ -893,7 +828,7 @@ class DllInjector {
         .map((child) {
           final title = child.title.isEmpty ? '<空标题>' : child.title;
           final cls = child.className.isEmpty ? '<无类名>' : child.className;
-          return 'D${child.depth}:$cls:$title';
+          return '$cls:$title';
         })
         .join(' | ');
 
@@ -907,22 +842,22 @@ class DllInjector {
     final enumWindowsProc = Pointer.fromFunction<EnumWindowsProc>(_enumWindowsProc, 0);
     final pidsPtr = calloc<Pointer<Int32>>();
     pidsPtr.value = calloc<Int32>(100);
-    
+
     // 初始化数组为0
     for (int i = 0; i < 100; i++) {
       pidsPtr.value[i] = 0;
     }
-    
+
     try {
       EnumWindows(enumWindowsProc, pidsPtr.address);
-      
+
       final pids = <int>[];
       for (int i = 0; i < 100; i++) {
         final pid = pidsPtr.value[i];
         if (pid == 0) break;
         pids.add(pid);
       }
-      
+
       if (pids.isNotEmpty) {
         return pids.first;
       } else {
@@ -938,7 +873,7 @@ class DllInjector {
     try {
       final processId = calloc<DWORD>();
       GetWindowThreadProcessId(hWnd, processId);
-      
+
       final titleLength = GetWindowTextLength(hWnd);
       if (titleLength > 0) {
         final titleBuffer = calloc<Uint16>(titleLength + 1);
@@ -947,7 +882,7 @@ class DllInjector {
           titleBuffer.asTypedList(titleLength + 1).takeWhile((c) => c != 0)
         );
         free(titleBuffer);
-        
+
         if (title.contains('微信') || title.contains('Weixin')) {
           final pidsPtr = Pointer<Pointer<Int32>>.fromAddress(lParam);
           final pids = pidsPtr.value;
@@ -959,11 +894,11 @@ class DllInjector {
           }
         }
       }
-      
+
       free(processId);
-      return 1; 
+      return 1;
     } catch (e) {
-      return 1; 
+      return 1;
     }
   }
 
@@ -991,17 +926,9 @@ class DllInjector {
 }
 
 class _ChildWindowInfo {
-  _ChildWindowInfo(this.hwnd, this.title, this.className, this.depth);
+  _ChildWindowInfo(this.hwnd, this.title, this.className);
 
   final int hwnd;
   final String title;
   final String className;
-  final int depth;
-}
-
-class _WindowTraversalTask {
-  _WindowTraversalTask(this.hwnd, this.depth);
-
-  final int hwnd;
-  final int depth;
 }
