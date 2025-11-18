@@ -25,7 +25,7 @@
 
 ## 3. 标准调用流程
 
-1. **确认 WeChat 进程**：自行查找 PID（App 内置实现可参考 `DllInjector.findProcessIds`）。最好确保微信已经完成登录并刚打开过朋友圈图片，以便触发密钥输出。
+1. **确认 WeChat 进程**：自行查找 PID（App 内置实现可参考 `DllInjector.findProcessIds`）。
 2. **加载 DLL**：调用语言负责把 `wx_key.dll` 加载进当前进程，例如：
    - Dart/Flutter：`DynamicLibrary.open('assets/dll/wx_key.dll')`
    - C#：`var dll = NativeLibrary.Load("wx_key.dll");`
