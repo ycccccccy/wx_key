@@ -762,7 +762,7 @@ class DllInjector {
 
   static bool _hasReadyComponents(List<_ChildWindowInfo> children) {
     if (children.isEmpty) {
-      AppLogger.warning('子窗口列表为空，但仍视为可注入(容错处理)');
+      AppLogger.warning('子窗口列表为空，但仍视为可注入');
       return true;
     }
 
