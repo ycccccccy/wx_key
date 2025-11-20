@@ -1,99 +1,148 @@
-# wx_key.dll 调用扩展说明
+# wx_key.dll 集成开发指南
 
-本文档说明 `wx_key/wx_key.dll`（发布包位于 `assets/dll/wx_key.dll`）在项目中的作用、导出接口以及如何在自定义程序中复用它来获取微信数据库/图片密钥。原生项目源码位于 `wx_key/` 目录，导出函数声明见 `wx_key/include/hook_controller.h`。
+本文档旨在帮助开发者快速理解并集成 `wx_key.dll`。该组件封装了微信逆向工程的核心逻辑，让你无需关心底层的内存扫描与 Hook 实现，即可在 C#、Flutter 或 C++ 等上层应用中获取微信数据库密钥与图片密钥。
 
-## 1. DLL 所做的事情
+---
 
-- DLL 由 Flutter 进程加载，随后通过 `RemoteScanner`/`RemoteHooker` 在微信进程中寻找 `Weixin.dll` 内的密钥函数（4.x 不同版本使用特征码匹配）。
-- 找到目标地址后，DLL 在远程进程中写入 `Shellcode`，在函数被调用时拦截密钥缓冲区，将 32 字节密钥复制到共享内存，再把状态写入环形队列。
-- Flutter 侧（`lib/services/remote_hook_controller.dart`）仅做轮询：每 100ms 调用 `PollKeyData`/`GetStatusMessage`，读取数据并刷新 UI。
-- 因为整个 Hook 生命周期、IPC 以及清理逻辑都封装在 DLL 内，其他语言只要按顺序调用导出函数即可复用。
+## 1. 核心原理
 
-> ⚠️ 现有 Shellcode 是 x64 版本，要求调用进程与微信客户端均为 64 位，并且需要具备打开微信进程的权限（建议以管理员权限运行）。
+简单来说，`wx_key.dll` 充当了**宿主程序**与**微信进程**之间的桥梁。
 
-## 2. 导出函数总览
+1.  **注入与扫描**：当你的程序加载此 DLL 并调用初始化后，它会通过 `RemoteScanner` 扫描微信进程内存，利用特征码定位密钥获取函数的入口（支持 4.x 多个版本）。
+2.  **拦截与共享**：定位成功后，DLL 会写入一段 Shellcode 进行 Hook。当微信尝试读取数据库时，Shellcode 会拦截 32 字节的密钥，将其拷贝到**共享内存环形队列**中。
+3.  **轮询机制**：由于 Hook 运行在微信进程内，为了稳定传输，我们采用了“非阻塞轮询”方案。你的程序只需定时检查共享内存，即可拿到密钥。
 
-| 函数 | 声明 | 作用 |
-| --- | --- | --- |
-| `bool InitializeHook(DWORD targetPid)` | 输入微信 PID | 初始化系统调用、远程扫描 `Weixin.dll`、分配共享缓冲区并安装 Hook。成功后会启动 IPC 监听线程。 |
-| `bool PollKeyData(char* keyBuffer, int bufferSize)` | `keyBuffer` 至少 65 字节 | **非阻塞**地检查是否有新密钥。如果有，则写入 64 位十六进制字符串（32 字节密钥）并返回 `true`。一次返回后缓冲区即被清空。 |
-| `bool GetStatusMessage(char* statusBuffer, int bufferSize, int* outLevel)` | 建议 `statusBuffer >= 256` | 读取 DLL 内部的状态/日志，`outLevel`：`0=info / 1=success / 2=error`。无消息时返回 `false`。 |
-| `bool CleanupHook()` | 无参数 | 卸载远程 Hook、释放共享内存、关闭进程句柄并停止监听线程。 |
-| `const char* GetLastErrorMsg()` | 无参数 | 返回最近一次失败的中文/英文错误描述。 |
+> **⚠️ 环境硬性要求**：
+> *   **架构**：仅支持 x64 系统与 64 位微信客户端（Shellcode 为 x64 汇编）。
+> *   **权限**：调用进程若失败可能需要 **管理员身份（Administrator）** 运行。
 
-更多细节可直接参考 `wx_key/include/hook_controller.h` 以及实现文件 `wx_key/src/hook_controller.cpp`。
+---
+
+## 2. API 接口说明
+
+所有导出函数均为 C 风格接口，声明文件可见 `wx_key/include/hook_controller.h`。
+
+| 接口函数 | 参数说明 | 详细描述 |
+| :--- | :--- | :--- |
+| **`InitializeHook`** | `DWORD targetPid` (微信进程ID) | **启动入口**。执行远程扫描、分配共享内存并注入 Shellcode。成功返回 `true`，失败请调 `GetLastErrorMsg`。 |
+| **`PollKeyData`** | `char* keyBuf`<br>`int size` (建议 >= 65) | **获取密钥**。非阻塞检查。如果捕获到密钥，会将其格式化为 64 位 HEX 字符串写入缓冲区并返回 `true`。一次读取后自动清空。 |
+| **`GetStatusMessage`** | `char* msgBuf`<br>`int size`<br>`int* outLevel` | **获取日志**。读取 DLL 内部运行日志（如“扫描成功”、“特征码未找到”等）。`outLevel` 对应：`0=Info, 1=Success, 2=Error`。 |
+| **`CleanupHook`** | 无 | **清理资源**。卸载远程 Hook、释放共享内存并关闭句柄。**程序退出前务必调用**。 |
+| **`GetLastErrorMsg`** | 无 | **错误诊断**。返回最近一次操作失败的具体原因。 |
+
+---
 
 ## 3. 标准调用流程
 
-1. **确认 WeChat 进程**：自行查找 PID（App 内置实现可参考 `DllInjector.findProcessIds`）。
-2. **加载 DLL**：调用语言负责把 `wx_key.dll` 加载进当前进程，例如：
-   - Dart/Flutter：`DynamicLibrary.open('assets/dll/wx_key.dll')`
-   - C#：`var dll = NativeLibrary.Load("wx_key.dll");`
-3. **调用 `InitializeHook(pid)`**：
-   - 返回 `true` 表示 Hook 安装成功且 IPC 已启动。
-   - 若返回 `false`，请用 `GetLastErrorMsg()` 查看原因（可能是不支持的微信版本、没有权限或远程内存分配失败）。
-4. **轮询密钥与状态**：
-  ```c
-  char keyBuf[65] = {0};
-  if (PollKeyData(keyBuf, sizeof(keyBuf))) {
-      // keyBuf 形如 "9d5d7659a7..."
-  }
+无论使用哪种语言，集成步骤都应该要遵循以下流程：
 
-  int level = 0;
-  char statusBuf[256] = {0};
-  while (GetStatusMessage(statusBuf, sizeof(statusBuf), &level)) {
-      // level: 0/1/2，对应 info/success/error
-  }
-  ```
-   建议使用定时器或后台线程不断轮询（UI 线程应保持非阻塞）。Flutter 版本的实现位于 `RemoteHookController._startPolling()` 供参考。
-5. **结束时调用 `CleanupHook()`**：确保远程 Shellcode 被卸载、共享内存和句柄被释放。再次启动前需要重新调用 `InitializeHook`。
+### 第一步：定位进程
+自行查找 `Weixin.exe` 的 PID（进程 ID）。
 
-## 4. 自定义程序集成示例
+### 第二步：加载 DLL
+将 `wx_key.dll` 加载到当前进程空间。
+*   **Flutter**: `DynamicLibrary.open('assets/dll/wx_key.dll')`
+*   **C#**: `NativeLibrary.Load("wx_key.dll")`
 
-以下示例展示如何在 C# 中使用 P/Invoke（其他语言原理一致）：
+### 第三步：初始化 (Initialize)
+调用 `InitializeHook(pid)`。
+*   如果返回 `false`，通常是因为**权限不足**或**微信版本不支持**（特征码失效），请立即打印 `GetLastErrorMsg()` 排查。
+
+### 第四步：轮询 (Polling)
+启动一个后台线程或定时器（建议间隔 100ms），循环调用 `PollKeyData` 和 `GetStatusMessage`。
+*   **注意**：不要在 UI 线程直接做死循环，也不要设置过长的等待时间。
+
+### 第五步：清理 (Cleanup)
+在程序关闭或不再需要功能时，**必须**调用 `CleanupHook()`。
+*   如果不清理，残留在微信进程内的 Shellcode 可能会在微信后续运行时导致崩溃。
+
+---
+
+## 4. 代码集成示例 (C#)
+
+以下代码展示了如何通过 P/Invoke 封装一个健壮的调用类：
 
 ```csharp
-[DllImport("wx_key.dll", CallingConvention = CallingConvention.Cdecl)]
-static extern bool InitializeHook(uint targetPid);
+using System.Runtime.InteropServices;
+using System.Text;
 
-[DllImport("wx_key.dll", CallingConvention = CallingConvention.Cdecl)]
-static extern bool PollKeyData(StringBuilder keyBuffer, int bufferSize);
+public class WeChatKeyDumper
+{
+    private const string DllName = "wx_key.dll";
 
-[DllImport("wx_key.dll", CallingConvention = CallingConvention.Cdecl)]
-static extern bool GetStatusMessage(StringBuilder statusBuffer, int bufferSize, out int level);
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    private static extern bool InitializeHook(uint targetPid);
 
-[DllImport("wx_key.dll", CallingConvention = CallingConvention.Cdecl)]
-static extern bool CleanupHook();
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    private static extern bool PollKeyData(StringBuilder keyBuffer, int bufferSize);
 
-static void Demo(uint pid) {
-    if (!InitializeHook(pid)) throw new InvalidOperationException(Marshal.PtrToStringUTF8(GetLastErrorMsg()));
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    private static extern bool GetStatusMessage(StringBuilder statusBuffer, int bufferSize, out int level);
 
-    Task.Run(async () => {
-        var keyBuf = new StringBuilder(65);
-        var statusBuf = new StringBuilder(256);
-        while (true) {
-            if (PollKeyData(keyBuf, keyBuf.Capacity)) {
-                Console.WriteLine($"Key: {keyBuf}");
-            }
-            while (GetStatusMessage(statusBuf, statusBuf.Capacity, out var level)) {
-                Console.WriteLine($"[DLL:{level}] {statusBuf}");
-            }
-            await Task.Delay(100);
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    private static extern bool CleanupHook();
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    private static extern IntPtr GetLastErrorMsg();
+
+    // 启动监听任务
+    public void Start(uint pid)
+    {
+        if (!InitializeHook(pid))
+        {
+            string error = Marshal.PtrToStringUTF8(GetLastErrorMsg());
+            throw new Exception($"初始化失败: {error} (请尝试以管理员身份运行)");
         }
-    });
+
+        Task.Run(async () =>
+        {
+            var keyBuf = new StringBuilder(128);
+            var logBuf = new StringBuilder(512);
+            int level;
+
+            try
+            {
+                while (true)
+                {
+                    // 1. 尝试获取密钥
+                    if (PollKeyData(keyBuf, keyBuf.Capacity))
+                    {
+                        Console.WriteLine($"[KEY FOUND] {keyBuf}");
+                        // 拿到密钥后，可根据需求决定是否继续监听
+                    }
+
+                    // 2. 获取内部日志
+                    while (GetStatusMessage(logBuf, logBuf.Capacity, out level))
+                    {
+                        Console.WriteLine($"[DLL Log - L{level}] {logBuf}");
+                    }
+
+                    await Task.Delay(100); // 避免 CPU 占用过高
+                }
+            }
+            finally
+            {
+                CleanupHook(); // 确保线程退出时清理环境
+            }
+        });
+    }
 }
 ```
 
-Flutter 中的实现请查看 `lib/services/remote_hook_controller.dart`，该文件展示了如何通过 `ffi` 绑定函数指针、如何轮询以及如何把密钥传回状态管理。
+---
 
-## 5. 常见注意事项
+## 5. 开发者避坑指南
 
-- **版本支持**：`RemoteScanner` 内置两套特征码，目前覆盖 4.x 所有可用版本。遇到新版微信无法使用时，请更新 `VersionConfigManager` 中的特征码并重新编译 DLL。
-- **运行权限**：需要 `PROCESS_ALL_ACCESS` 打开微信进程，若 `InitializeHook` 返回权限相关错误，请以管理员方式运行。
-- **缓冲区大小**：
-  - `PollKeyData` 的 `keyBuffer` 至少 `65` 字节（64 个 hex 字符 + `\0`）。
-  - `GetStatusMessage` 建议 256+ 字节，否则长日志会被截断。
-- **生命周期**：同一进程仅允许一次成功的 `InitializeHook`。如需重新安装，需要先调用 `CleanupHook`。
-- **线程模型**：所有导出函数都是同步、线程安全的。轮询时可在独立线程调用；不要在回调中耗时过久，以免阻塞其他轮询。
+在实际集成中，你可能会遇到这些问题：
 
-满足上述要求后，第三方程序便可以像项目内一样，通过 `wx_key.dll` 获取微信数据库/图片密钥，无需重新实现远程注入与 Hook 逻辑。
+1.  **缓冲区溢出**：
+    `PollKeyData` 返回的是 Hex 字符串，加上结束符至少需要 65 字节。C# 的 `StringBuilder` 或 C++ 的 `char[]` 分配小了会导致内存踩踏，建议给 **128 字节** 以防万一。
+
+2.  **单例原则**：
+    同一个微信进程只能被 Hook 一次。如果需要重启扫描，请先调用 `CleanupHook` 彻底释放资源，再重新 `InitializeHook`。
+
+3.  **版本兼容性**：
+    如果遇到微信更新导致无法获取密钥，通常是特征码偏移变了。此时无需修改上层代码，只需更新 DLL 源码中的 `RemoteScanner` 特征码库并重新编译 DLL 即可。
+
+4.  **多线程安全**：
+    虽然导出函数内部是线程安全的，但为了逻辑清晰，建议仅在一个专用的 Monitor 线程中进行轮询操作。
